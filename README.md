@@ -8,11 +8,11 @@ An MCP (Model Context Protocol) server that gives AI coding assistants (Claude C
 
 ## Why Camoufox?
 
-| Feature | chrome-devtools-mcp | js-reverse-mcp | **camoufox-reverse-mcp** |
-|---------|--------------------|-----------------|-----------------------|
-| Browser Engine | Chrome (Puppeteer) | Chrome (Patchright) | **Firefox (Camoufox)** |
-| Anti-Detection | None | JS-level 60+ params | **C++ engine-level fingerprint spoofing** |
-| Debug Capability | Limited (no breakpoints) | Full CDP | **Playwright + JS Hook** |
+| Feature | chrome-devtools-mcp | **camoufox-reverse-mcp** |
+|---------|--------------------|-----------------------|
+| Browser Engine | Chrome (Puppeteer) | **Firefox (Camoufox)** |
+| Anti-Detection | None | **C++ engine-level fingerprint spoofing** |
+| Debug Capability | Limited (no breakpoints) | **Playwright + JS Hook** |
 
 **Core Advantages:**
 - Camoufox modifies fingerprint information at the **C++ engine level**, not JS patches

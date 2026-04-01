@@ -6,11 +6,11 @@
 
 ## 为什么选择 Camoufox？
 
-| 特性 | chrome-devtools-mcp | js-reverse-mcp | **camoufox-reverse-mcp** |
-|-----|--------------------|-----------------|-----------------------|
-| 浏览器内核 | Chrome (Puppeteer) | Chrome (Patchright) | **Firefox (Camoufox)** |
-| 反检测方案 | 无 | JS 级 60+ 参数 | **C++ 引擎级指纹伪造** |
-| 调试能力 | 有限（无断点） | 完整 CDP | **Playwright + JS Hook** |
+| 特性 | chrome-devtools-mcp | **camoufox-reverse-mcp** |
+|-----|--------------------|-----------------------|
+| 浏览器内核 | Chrome (Puppeteer) | **Firefox (Camoufox)** |
+| 反检测方案 | 无 | **C++ 引擎级指纹伪造** |
+| 调试能力 | 有限（无断点） | **Playwright + JS Hook** |
 
 **核心优势：**
 - Camoufox 在 **C++ 层面** 修改指纹信息，非 JS 层 patch，从根源不可检测
