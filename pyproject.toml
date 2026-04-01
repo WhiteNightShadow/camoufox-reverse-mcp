@@ -1,0 +1,21 @@
+[project]
+name = "camoufox-reverse-mcp"
+version = "0.1.0"
+description = "Anti-detection browser MCP server for JavaScript reverse engineering"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = [
+    "mcp>=1.0.0",
+    "camoufox[geoip]>=0.4.0",
+    "playwright>=1.40.0",
+]
+
+[project.scripts]
+camoufox-reverse-mcp = "camoufox_reverse_mcp.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/camoufox_reverse_mcp"]
