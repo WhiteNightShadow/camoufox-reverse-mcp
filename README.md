@@ -1,75 +1,78 @@
 # camoufox-reverse-mcp
 
-[English](README.md) | [中文](README_zh.md)
+[中文](README.md) | [English](README_en.md)
 
-> Anti-detection browser MCP server for JavaScript reverse engineering.
+> 基于反指纹浏览器的 MCP Server，专为 JavaScript 逆向工程设计。
 
-An MCP (Model Context Protocol) server that gives AI coding assistants (Claude Code, Cursor, Cline, etc.) the ability to perform JavaScript reverse engineering through the **Camoufox** anti-detection browser — including API parameter analysis, JS source analysis, dynamic debugging, function hooking, network interception, and cookie/storage management.
+一个 MCP（Model Context Protocol）服务器，让 AI 编码助手（Claude Code、Cursor、Cline 等）能够通过 **Camoufox** 反指纹浏览器对目标网站进行：接口参数分析、JS 文件静态分析、动态断点调试、函数 Hook 追踪、网络流量拦截、JSVMP 字节码分析、Cookie/存储管理等逆向操作。
 
-## Why Camoufox?
+## 为什么选择 Camoufox？
 
-| Feature | chrome-devtools-mcp | **camoufox-reverse-mcp** |
-|---------|--------------------|-----------------------|
-| Browser Engine | Chrome (Puppeteer) | **Firefox (Camoufox)** |
-| Anti-Detection | None | **C++ engine-level fingerprint spoofing** |
-| Debug Capability | Limited (no breakpoints) | **Playwright + JS Hook** |
+| 特性 | chrome-devtools-mcp | **camoufox-reverse-mcp** |
+|-----|--------------------|-----------------------|
+| 浏览器内核 | Chrome (Puppeteer) | **Firefox (Camoufox)** |
+| 反检测方案 | 无 | **C++ 引擎级指纹伪造** |
+| 调试能力 | 有限（无断点） | **Playwright + JS Hook** |
+| JSVMP 分析 | 无 | **解释器插桩 + 属性追踪 + 字符串提取** |
+| Hook 持久化 | 不支持 | **context 级持久化，导航后自动重注入** |
 
-**Core Advantages:**
-- Camoufox modifies fingerprint information at the **C++ engine level**, not JS patches
-- Juggler protocol sandbox isolation makes Playwright **completely undetectable** by page JS
-- BrowserForge generates fingerprints based on **real-world traffic distribution**
-- Works on sites with strong bot detection: Rui Shu, GeeTest, Cloudflare, etc.
+**核心优势：**
+- Camoufox 在 **C++ 层面** 修改指纹信息，非 JS 层 patch，从根源不可检测
+- Juggler 协议沙箱隔离使 Playwright **完全不可被页面 JS 检测到**
+- BrowserForge 按 **真实世界流量统计分布** 生成指纹，不是随机拼凑
+- 能在瑞数、极验、Cloudflare 等强反爬站点上正常工作
+- Hook 使用 `Object.defineProperty` **防覆盖保护**，页面脚本无法恢复原始方法
 
 ---
 
-## Quick Start
+## 快速开始
 
-### Option 1: Install via AI Chat (Recommended)
+### 方式一：AI 对话框直接安装（推荐）
 
-Paste the following into your AI coding tool's chat (Cursor / Claude Code / Codex, etc.):
+在你的 AI 编码工具（Cursor / Claude Code / Codex 等）的对话框中输入：
 
 ```
-Please configure camoufox-reverse-mcp and refer to this MCP for related operations: https://github.com/WhiteNightShadow/camoufox-reverse-mcp
+请帮我配置camoufox-reverse-mcp并在后续触发相关操作的时候查阅该mcp：https://github.com/WhiteNightShadow/camoufox-reverse-mcp
 ```
 
-The AI will automatically clone, install dependencies, and configure the MCP server.
+AI 会自动完成克隆、安装依赖、配置 MCP Server 的全部流程。
 
-### Option 2: Manual Installation
+### 方式二：手动安装
 
-**1. Clone the repository**
+**1. 克隆项目**
 
 ```bash
 git clone https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git
 cd camoufox-reverse-mcp
 ```
 
-**2. Install dependencies**
+**2. 安装依赖**
 
 ```bash
 pip install -e .
 ```
 
-Or with uv:
+或使用 uv：
 
 ```bash
 uv pip install -e .
 ```
 
-**3. Configure your AI tool**
+**3. 配置到你的 AI 工具**
 
-Add the MCP server config to your tool's configuration file (see "Client Configuration" below).
+根据你使用的工具，将 MCP Server 配置添加到对应的配置文件中（见下方「客户端配置」章节）。
 
 ---
 
-## Usage
+## 使用方法
 
-### As MCP Server (stdio)
+### 作为 MCP Server 启动
 
 ```bash
 python -m camoufox_reverse_mcp
 ```
 
-With options:
+带参数启动：
 
 ```bash
 python -m camoufox_reverse_mcp \
@@ -79,22 +82,22 @@ python -m camoufox_reverse_mcp \
   --os windows
 ```
 
-### CLI Options
+### 命令行参数
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--proxy` | Proxy server URL | None |
-| `--headless` | Headless mode | false |
-| `--os` | OS fingerprint (windows/macos/linux) | windows |
-| `--geoip` | Infer geolocation from proxy IP | false |
-| `--humanize` | Humanized mouse movement | false |
-| `--block-images` | Block image loading | false |
-| `--block-webrtc` | Block WebRTC | false |
+| 参数 | 说明 | 默认值 |
+|-----|------|-------|
+| `--proxy` | 代理服务器地址 | 无 |
+| `--headless` | 无头模式 | false |
+| `--os` | 操作系统伪装（windows/macos/linux） | windows |
+| `--geoip` | 根据代理 IP 自动推断地理位置 | false |
+| `--humanize` | 人类化鼠标移动 | false |
+| `--block-images` | 屏蔽图片加载 | false |
+| `--block-webrtc` | 屏蔽 WebRTC | false |
 
-### Client Configuration
+### 客户端配置
 
 <details>
-<summary><b>Cursor (.cursor/mcp.json)</b></summary>
+<summary><b>Cursor（.cursor/mcp.json）</b></summary>
 
 ```json
 {
@@ -126,7 +129,7 @@ python -m camoufox_reverse_mcp \
 </details>
 
 <details>
-<summary><b>Claude Code (with proxy)</b></summary>
+<summary><b>Claude Code（带代理）</b></summary>
 
 ```json
 {
@@ -148,58 +151,293 @@ python -m camoufox_reverse_mcp \
 
 ---
 
-## Available Tools (44)
+## 可用工具一览（57 个）
 
-### Navigation & Page
-- `launch_browser` — Launch Camoufox with anti-detection config
-- `close_browser` — Close browser and release resources
-- `navigate` — Navigate to URL
-- `reload` / `go_back` — Reload / go back
-- `take_screenshot` / `take_snapshot` — Screenshot / accessibility tree
-- `click` / `type_text` — Click / type into elements
-- `wait_for` — Wait for element or URL pattern
-- `get_page_info` — Get current page info
+### 导航 & 页面
+| 工具 | 说明 |
+|------|------|
+| `launch_browser` | 启动 Camoufox 反指纹浏览器（已启动时返回完整会话状态） |
+| `close_browser` | 关闭浏览器，释放资源 |
+| `navigate` | 导航到指定 URL |
+| `reload` / `go_back` | 刷新页面 / 浏览器后退 |
+| `take_screenshot` | 截图（支持全页面、指定元素） |
+| `take_snapshot` | 获取页面无障碍树（兼容新版 Playwright） |
+| `click` / `type_text` | 点击元素 / 输入文本 |
+| `wait_for` | 等待元素出现或 URL 匹配 |
+| `get_page_info` | 获取当前页面 URL、标题、视口尺寸 |
+| `get_page_content` | **[新]** 一键导出渲染后 HTML + title + meta + 可见文本 |
+| `get_session_info` | **[新]** 查看当前会话状态：浏览器/上下文/页面/抓包/Hook |
 
-### Script Analysis (Reverse Engineering Core)
-- `list_scripts` — List all loaded JS scripts
-- `get_script_source` — Get full JS source code
-- `search_code` — Search keyword across all scripts
-- `save_script` — Save JS file locally
-- `get_page_html` — Get page HTML
+### JS 脚本分析（逆向核心）
+| 工具 | 说明 |
+|------|------|
+| `list_scripts` | 列出页面所有已加载的 JS 脚本 |
+| `get_script_source` | 获取指定 JS 文件的完整源码 |
+| `search_code` | 在所有已加载脚本中搜索关键词（返回匹配数量和脚本列表，不再截断） |
+| `search_code_in_script` | **[新]** 在指定脚本中搜索关键词（更精准，避免全量扫描） |
+| `save_script` | 将 JS 文件保存到本地 |
+| `get_page_html` | 获取完整页面 HTML 或指定元素 |
 
-### Debugging (Reverse Engineering Core)
-- `evaluate_js` — Execute arbitrary JS in page context
-- `evaluate_js_handle` — Execute JS and inspect complex objects
-- `add_init_script` — Inject scripts that run before page JS
-- `set_breakpoint_via_hook` — Set pseudo-breakpoints via JS hooks
-- `get_breakpoint_data` — Get captured breakpoint data
-- `get_console_logs` — Get page console output
+### 断点调试（逆向核心）
+| 工具 | 说明 |
+|------|------|
+| `evaluate_js` | 在页面上下文执行任意 JS 表达式 |
+| `evaluate_js_handle` | 执行 JS 并检查复杂对象属性 |
+| `add_init_script` | 注入在页面 JS 之前执行的脚本（**支持 persistent 持久化**） |
+| `freeze_prototype` | **[新]** 冻结原型方法，防止页面脚本覆盖 Hook |
+| `set_breakpoint_via_hook` | 通过 Hook 设置伪断点（**支持 persistent 持久化**） |
+| `get_breakpoint_data` | 获取伪断点捕获的数据 |
+| `get_console_logs` | 获取页面 console 输出 |
 
-### Hooking (Reverse Engineering Core)
-- `trace_function` — Trace function calls without pausing
-- `get_trace_data` — Get collected trace data
-- `hook_function` — Inject custom hook code (before/after/replace)
-- `inject_hook_preset` — One-click preset hooks (xhr/fetch/crypto/websocket/debugger_bypass)
-- `remove_hooks` — Remove all hooks
+### Hook & 追踪（逆向核心）
+| 工具 | 说明 |
+|------|------|
+| `trace_function` | 追踪函数调用（**支持 persistent 持久化，跨导航数据不丢失**） |
+| `get_trace_data` | 获取追踪数据（**合并页面内数据和持久化数据**） |
+| `hook_function` | 注入自定义 Hook（before/after/replace，**支持 non_overridable 防覆盖**） |
+| `inject_hook_preset` | 一键注入预置 Hook（**默认 persistent=True 持久化**） |
+| `trace_property_access` | **[新]** 追踪属性访问（Proxy 级别），揭示 JSVMP 读取的环境信息 |
+| `get_property_access_log` | **[新]** 获取属性访问记录 |
+| `remove_hooks` | 移除所有 Hook（**可选保留持久化 Hook**） |
 
-### Network Analysis (Reverse Engineering Core)
-- `start_network_capture` / `stop_network_capture` — Capture network traffic
-- `list_network_requests` — List captured requests with filters
-- `get_network_request` — Get full request details
-- `get_request_initiator` — Get JS call stack that initiated a request
-- `intercept_request` — Intercept: log / block / modify / mock
-- `stop_intercept` — Stop interception
+### 网络分析（逆向核心）
+| 工具 | 说明 |
+|------|------|
+| `start_network_capture` | 开始捕获网络请求（**支持 capture_body=True 捕获响应体**） |
+| `stop_network_capture` | 停止捕获 |
+| `list_network_requests` | 列出已捕获的请求（支持多维过滤） |
+| `get_network_request` | 获取指定请求的完整详情（**支持 include_headers=False 省 token**） |
+| `get_request_initiator` | 获取请求发起的 JS 调用栈 |
+| `intercept_request` | 拦截请求：记录 / 阻断 / 修改 / 模拟响应 |
+| `stop_intercept` | 停止拦截 |
+| `search_response_body` | **[新]** 在所有已捕获响应体中全文搜索关键词 |
+| `get_response_body_page` | **[新]** 分页读取大响应体（避免截断） |
+| `search_json_path` | **[新]** 按 JSON 路径提取响应数据（支持 `data[*].id` 通配） |
 
-### Storage Management
-- `get_cookies` / `set_cookies` / `delete_cookies` — Cookie management
-- `get_storage` / `set_storage` — localStorage / sessionStorage
-- `export_state` / `import_state` — Save / restore browser state
+### JSVMP 逆向分析（新增模块）
+| 工具 | 说明 |
+|------|------|
+| `hook_jsvmp_interpreter` | **[新]** JSVMP 解释器插桩：追踪 API 调用和属性读取 |
+| `get_jsvmp_log` | **[新]** 获取 JSVMP 执行日志（含 API 调用统计和属性读取摘要） |
+| `dump_jsvmp_strings` | **[新]** 提取 JSVMP 字符串表：解密混淆字符串，发现 API 名称 |
+| `compare_env` | **[新]** 浏览器环境指纹收集：用于与 Node.js/jsdom 环境对比 |
 
-### Fingerprint & Anti-Detection
-- `get_fingerprint_info` — Inspect current browser fingerprint
-- `check_detection` — Test anti-detection on bot detection sites
-- `bypass_debugger_trap` — Bypass anti-debugging traps
+### 存储管理
+| 工具 | 说明 |
+|------|------|
+| `get_cookies` / `set_cookies` / `delete_cookies` | Cookie 管理 |
+| `get_storage` / `set_storage` | localStorage / sessionStorage 读写 |
+| `export_state` / `import_state` | 导出 / 导入完整浏览器状态 |
 
-## License
+### 指纹 & 反检测
+| 工具 | 说明 |
+|------|------|
+| `get_fingerprint_info` | 查看当前浏览器指纹详情 |
+| `check_detection` | 在 bot 检测站点测试反检测效果并截图 |
+| `bypass_debugger_trap` | 一键绕过反调试陷阱 |
+
+---
+
+## v0.2.0 主要改进
+
+### 1. Hook 持久化 & 防覆盖
+
+- `inject_hook_preset` 默认使用 context 级 `add_init_script`，**导航后自动重注入**
+- XHR/Fetch Hook 使用 `Object.defineProperty(configurable: false)` 防止页面脚本覆盖
+- Hook 函数的 `toString()` 返回 `[native code]`，避免被反检测发现
+- 新增 `freeze_prototype` 工具，可冻结任意原型方法
+
+### 2. get_request_initiator 修复
+
+- 改进 URL 匹配算法（pathname 级别匹配）
+- 添加诊断信息：显示 Hook 是否激活、日志条目数量
+- 提供具体的错误排查建议
+
+### 3. trace_function 持久化
+
+- 新增 `persistent=True` 参数，跨导航自动重注入
+- 持久化模式通过 console 事件收集数据到 Python 端，导航不丢失
+- `get_trace_data` 自动合并页面数据和持久化数据
+
+### 4. JSVMP 专项分析工具
+
+- `hook_jsvmp_interpreter`：自动插桩 Function.prototype.apply 和敏感属性，追踪 JSVMP 的全部外部交互
+- `dump_jsvmp_strings`：提取字符串数组、解码混淆字符串、识别 API 名称
+- `trace_property_access`：Proxy 级别属性访问追踪，揭示指纹收集行为
+- `compare_env`：全面收集浏览器环境指纹，用于 Node.js/jsdom 环境对比
+
+### 5. search_code 改进
+
+- 不再静默截断：返回 `total_matches` 总数和 `scripts_with_matches` 列表
+- 默认 `max_results` 提升到 50（最大 200）
+- 新增 `search_code_in_script` 支持在指定脚本中搜索（更多上下文，更高限额）
+
+### 6. 网络捕获增强
+
+- `start_network_capture(capture_body=True)` 支持捕获响应体
+- 大响应体自动截断并标记 `response_body_truncated`
+- 请求 ID 使用全局递增计数器，不再重复
+
+---
+
+## 使用场景示例
+
+### 场景 1：逆向登录接口的签名参数
+
+```
+AI 操作链：
+1. launch_browser(headless=False, os_type="windows")
+2. inject_hook_preset("xhr")          ← 注入 XHR Hook（默认持久化）
+3. inject_hook_preset("crypto")       ← 注入加密函数 Hook
+4. navigate("https://example.com/login")
+5. type_text("#username", "test_user")
+6. type_text("#password", "test_pass")
+7. click("#login-btn")
+8. list_network_requests(method="POST") ← 看到带加密参数的请求
+9. get_network_request(request_id=3)    ← 查看完整参数
+10. get_request_initiator(request_id=3) ← 发现签名函数在 main.js:1234
+11. get_script_source("https://example.com/js/main.js")
+12. search_code("sign")                 ← 搜索签名相关代码
+13. hook_function("window.getSign", ...)
+14. 刷新 → get_trace_data("window.getSign")
+15. 输出完整签名算法还原结果
+```
+
+### 场景 2：对付 JSVMP 保护的站点
+
+```
+AI 操作链：
+1. launch_browser(headless=False)
+2. bypass_debugger_trap()                ← 先绕过反调试
+3. inject_hook_preset("xhr")             ← 持久化 Hook
+4. inject_hook_preset("fetch")           ← 持久化 Hook
+5. hook_jsvmp_interpreter("webmssdk.es5.js")  ← [新] JSVMP 插桩
+6. trace_property_access(["navigator.*", "screen.*", "document.cookie"])  ← [新]
+7. navigate("https://target.com")
+8. 触发目标操作（翻页、搜索等）
+9. get_jsvmp_log()                       ← [新] 查看 JSVMP 访问了哪些 API
+10. get_property_access_log()            ← [新] 查看读取了哪些环境属性
+11. dump_jsvmp_strings("webmssdk.es5.js") ← [新] 提取字符串表
+12. compare_env()                        ← [新] 收集浏览器环境，与 Node.js 对比
+13. 根据 API 调用和属性访问记录还原算法逻辑
+```
+
+### 场景 3：验证反检测效果
+
+```
+AI 操作链：
+1. launch_browser(os_type="windows", humanize=True)
+2. check_detection()                     ← 打开 bot.sannysoft.com 并截图
+3. get_fingerprint_info()                ← 查看详细指纹信息
+4. navigate("https://browserscan.net")   ← 测试更多检测站点
+5. take_screenshot(full_page=True)
+```
+
+### 场景 4：持久化 Hook 工作流
+
+```
+AI 操作链：
+1. launch_browser()
+2. inject_hook_preset("xhr", persistent=True)    ← context 级持久化
+3. inject_hook_preset("fetch", persistent=True)
+4. trace_function("XMLHttpRequest.prototype.open", persistent=True)  ← 持久化追踪
+5. navigate("https://page1.com")                 ← Hook 自动生效
+6. get_trace_data()                              ← 收集数据
+7. navigate("https://page2.com")                 ← Hook 自动重注入！
+8. get_trace_data()                              ← 数据包含两个页面的记录
+9. freeze_prototype("XMLHttpRequest", "open")    ← 防止页面覆盖
+```
+
+---
+
+## 技术架构
+
+```
+┌─────────────────────────────────────────────────┐
+│           AI 编码助手 (Cursor / Claude)          │
+│                    ↕ MCP (stdio)                 │
+├─────────────────────────────────────────────────┤
+│              camoufox-reverse-mcp               │
+│  ┌──────────┬──────────┬──────────┬──────────┐  │
+│  │Navigation│ Script   │Debugging │ Hooking  │  │
+│  │          │ Analysis │          │          │  │
+│  ├──────────┼──────────┼──────────┼──────────┤  │
+│  │ Network  │ JSVMP    │Fingerprint│  Utils  │  │
+│  │          │ Analysis │          │          │  │
+│  ├──────────┼──────────┼──────────┼──────────┤  │
+│  │ Storage  │ Persistent Scripts  │          │  │
+│  └──────────┴──────────┴──────────┴──────────┘  │
+│                    ↕ Playwright API               │
+├─────────────────────────────────────────────────┤
+│      Camoufox (反指纹 Firefox, Juggler 协议)      │
+│  C++ 引擎级指纹伪造 · BrowserForge 真实指纹分布     │
+└─────────────────────────────────────────────────┘
+```
+
+## 更新记录
+
+### v0.3.0（2026-04-03）— 稳定性修复 + 响应体检索 + DOM 导出 + 会话管理 + Token 优化
+
+> 修复实战中的稳定性问题，补全响应体检索、渲染态 DOM 导出、会话管理等缺失能力，优化 token 消耗。工具总数从 52 个增长至 57 个。
+
+**新增工具（5 个）**
+| 工具 | 说明 |
+|------|------|
+| `search_response_body` | 在所有已捕获响应体中全文搜索关键词 |
+| `get_response_body_page` | 分页读取大响应体，避免截断丢失数据 |
+| `search_json_path` | 按 JSON 路径提取响应数据（支持 `[*]` 通配） |
+| `get_page_content` | 一键导出渲染后 HTML + title + meta + 可见文本 |
+| `get_session_info` | 查看当前会话状态：浏览器/上下文/页面/抓包/Hook |
+
+**Bug 修复**
+- **take_snapshot**：修复 `Page object has no attribute accessibility` 错误，兼容新版 Playwright（>= 1.42），无障碍 API 移除后自动 fallback 到 JS 实现
+- **trace_property_access**：修复 `JSON.parse` 报错，原因是模板替换时把 JS 引号也替换掉了，导致 `JSON.parse(["..."])` 而非 `JSON.parse('[...]')`
+
+**改进项**
+- **launch_browser**：已启动时返回完整会话状态（页面 URL、上下文列表、抓包状态），不再只返回 `already_running`
+- **get_network_request**：新增 `include_headers=False` 选项，省略 headers 节约 token
+- **list_network_requests**：URL 截断到 200 字符，响应字段名缩短（`resource_type` → `type`，`duration` → `ms`）
+- **docstring 精简**：所有工具描述精简约 40%，减少每次 MCP 调用的 token 开销
+- **大响应体可观测性**：`search_response_body` 支持按关键词搜索全部已捕获响应 body；`get_response_body_page` 支持分页读取；`search_json_path` 支持按路径直接提取 JSON 数据
+
+### v0.2.0（2026-04-01）— Hook 持久化 + JSVMP 专项分析
+
+> 一句话：解决 Hook 导航后失效的核心痛点，新增 JSVMP 解释器插桩 / 属性追踪 / 字符串提取等专项逆向工具，工具总数从 44 个增长至 52 个。
+
+**新增工具（8 个）**
+| 工具 | 说明 |
+|------|------|
+| `freeze_prototype` | 冻结原型方法，防止页面脚本覆盖 Hook |
+| `search_code_in_script` | 在指定脚本中搜索关键词（精准 + 更多上下文） |
+| `trace_property_access` | Proxy 级属性访问追踪，揭示 JSVMP 读取的环境信息 |
+| `get_property_access_log` | 获取属性访问记录 |
+| `hook_jsvmp_interpreter` | JSVMP 解释器插桩：追踪 API 调用和敏感属性读取 |
+| `get_jsvmp_log` | 获取 JSVMP 执行日志（含调用统计与属性摘要） |
+| `dump_jsvmp_strings` | 提取 JSVMP 字符串表，解密混淆字符串，发现 API 名称 |
+| `compare_env` | 收集浏览器环境指纹，用于与 Node.js/jsdom 对比 |
+
+**改进项**
+- **Hook 持久化**：`inject_hook_preset` 默认 `persistent=True`，context 级注入，导航后自动重注入
+- **Hook 防覆盖**：XHR/Fetch Hook 使用 `Object.defineProperty(configurable: false)` + `toString` 伪装
+- **trace_function 持久化**：新增 `persistent=True`，通过 console 事件收集数据到 Python 端，导航不丢失
+- **get_request_initiator 修复**：改进 URL 匹配（pathname 级别）+ 添加诊断信息
+- **search_code 修复截断**：返回 `total_matches` 和 `scripts_with_matches`，结果不再静默 omit
+- **网络捕获响应体**：`start_network_capture(capture_body=True)` 支持捕获响应体
+- **缓冲区扩容**：日志和网络请求缓冲区从 500 增大到 2000
+- **请求 ID 稳定**：使用全局递增计数器，不再因 deque 弹出导致 ID 重复
+
+### v0.1.0（2026-03-31）— 初始版本
+
+> 一句话：基于 Camoufox 反指纹浏览器的 MCP Server，44 个工具覆盖 JS 逆向分析全链路。
+
+- 浏览器控制：启动 / 导航 / 截图 / 交互（11 个工具）
+- 脚本分析：列出 / 获取 / 搜索 / 保存脚本（5 个工具）
+- 调试：JS 执行 / init_script / 伪断点 / 控制台（6 个工具）
+- Hook：函数追踪 / 自定义 Hook / 预设 Hook（5 个工具）
+- 网络：捕获 / 过滤 / 详情 / 调用栈 / 拦截（7 个工具）
+- 存储：Cookie / Storage / 状态导入导出（7 个工具）
+- 指纹：指纹检查 / 检测测试 / 反调试绕过（3 个工具）
+
+## 许可证
 
 MIT

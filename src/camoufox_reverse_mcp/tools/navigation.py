@@ -19,21 +19,14 @@ async def launch_browser(
     """Launch the Camoufox anti-detection browser.
 
     Args:
-        headless: Run in headless mode (default False for debugging visibility).
-        os_type: OS fingerprint to emulate - "auto" (detect host OS),
-            "windows", "macos", or "linux". Using "auto" ensures CJK fonts
-            render correctly on the host system.
-        locale: Browser locale such as "zh-CN", "en-US". Defaults to "auto"
-            which detects the system locale. Affects Accept-Language headers
-            and content language preferences.
-        proxy: Proxy server URL (e.g. "http://127.0.0.1:7890").
-        humanize: Enable humanized mouse movement to mimic real users.
+        headless: Headless mode (default False).
+        os_type: OS fingerprint: "auto", "windows", "macos", "linux".
+        locale: Browser locale ("auto" detects system).
+        proxy: Proxy URL (e.g. "http://127.0.0.1:7890").
+        humanize: Enable humanized mouse movement.
         geoip: Auto-infer geolocation from proxy IP.
-        block_images: Block image loading for faster page loads.
-        block_webrtc: Block WebRTC to prevent IP leaks.
-
-    Returns:
-        dict with status, headless flag, os type, locale, and page list.
+        block_images: Block image loading.
+        block_webrtc: Block WebRTC.
     """
     try:
         config = {
@@ -162,7 +155,44 @@ async def take_snapshot() -> dict:
     """
     try:
         page = await browser_manager.get_active_page()
-        snapshot = await page.accessibility.snapshot()
+        # Try modern Playwright API first, fall back to legacy
+        try:
+            snapshot = await page.accessibility.snapshot()
+        except AttributeError:
+            # Playwright >= 1.42 removed page.accessibility, use JS fallback
+            snapshot = await page.evaluate("""() => {
+                function walk(node) {
+                    if (!node) return null;
+                    const item = {};
+                    const tag = node.tagName ? node.tagName.toLowerCase() : '';
+                    const role = node.getAttribute ? (node.getAttribute('role') || tag) : '';
+                    if (role) item.role = role;
+                    const name = node.getAttribute ? (node.getAttribute('aria-label')
+                        || node.getAttribute('alt') || node.getAttribute('title')
+                        || (node.tagName === 'INPUT' ? node.getAttribute('placeholder') : '')
+                        || '') : '';
+                    if (name) item.name = name;
+                    if (['INPUT','TEXTAREA','SELECT'].includes(node.tagName)) {
+                        item.value = node.value || '';
+                    }
+                    const text = [];
+                    const children = [];
+                    for (const child of (node.childNodes || [])) {
+                        if (child.nodeType === 3) {
+                            const t = child.textContent.trim();
+                            if (t) text.push(t);
+                        } else if (child.nodeType === 1) {
+                            const c = walk(child);
+                            if (c) children.push(c);
+                        }
+                    }
+                    if (text.length && !children.length) item.text = text.join(' ');
+                    if (children.length) item.children = children;
+                    if (!item.role && !item.name && !item.text && !children.length) return null;
+                    return item;
+                }
+                return walk(document.body);
+            }""")
         return {"snapshot": snapshot}
     except Exception as e:
         return {"error": str(e)}
@@ -251,6 +281,106 @@ async def get_page_info() -> dict:
             "title": await page.title(),
             "viewport_width": viewport.get("width"),
             "viewport_height": viewport.get("height"),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def get_page_content() -> dict:
+    """Export the rendered DOM content of the current page in one call.
+
+    Returns rendered HTML, page title, meta tags, and visible text.
+    Saves writing ad-hoc evaluate_js scripts for common extraction needs.
+
+    Returns:
+        dict with title, meta tags, rendered_html (first 50KB), and visible_text (first 20KB).
+    """
+    try:
+        page = await browser_manager.get_active_page()
+        result = await page.evaluate("""() => {
+            const title = document.title || '';
+            const metas = Array.from(document.querySelectorAll('meta')).map(m => {
+                const o = {};
+                for (const a of m.attributes) o[a.name] = a.value;
+                return o;
+            });
+            const html = document.documentElement.outerHTML;
+            // Extract visible text: walk body, skip script/style/hidden
+            function visibleText(node) {
+                if (!node) return '';
+                if (node.nodeType === 3) return node.textContent;
+                if (node.nodeType !== 1) return '';
+                const tag = node.tagName;
+                if (['SCRIPT','STYLE','NOSCRIPT','SVG'].includes(tag)) return '';
+                const style = window.getComputedStyle(node);
+                if (style.display === 'none' || style.visibility === 'hidden') return '';
+                let text = '';
+                for (const child of node.childNodes) text += visibleText(child);
+                if (['P','DIV','BR','LI','H1','H2','H3','H4','H5','H6','TR','DT','DD'].includes(tag)) {
+                    text = '\\n' + text + '\\n';
+                }
+                return text;
+            }
+            let visible = visibleText(document.body).replace(/\\n{3,}/g, '\\n\\n').trim();
+            return { title, metas, html, visible };
+        }""")
+        html = result.get("html", "")
+        visible = result.get("visible", "")
+        MAX_HTML = 50000
+        MAX_TEXT = 20000
+        resp = {
+            "title": result.get("title"),
+            "meta": result.get("metas"),
+            "rendered_html": html[:MAX_HTML],
+            "visible_text": visible[:MAX_TEXT],
+        }
+        if len(html) > MAX_HTML:
+            resp["html_truncated"] = True
+            resp["html_total_size"] = len(html)
+        if len(visible) > MAX_TEXT:
+            resp["text_truncated"] = True
+            resp["text_total_size"] = len(visible)
+        return resp
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def get_session_info() -> dict:
+    """Get the current session state: browser, contexts, pages, capture status.
+
+    Shows exactly what browser/context/page is active and what hooks/captures
+    are in place. Use this to understand the current debugging environment.
+
+    Returns:
+        dict with browser status, context list, page list, active page,
+        capture state, persistent scripts, and init scripts.
+    """
+    try:
+        running = browser_manager.browser is not None
+        contexts = list(browser_manager.contexts.keys())
+        pages = {}
+        for name, p in browser_manager.pages.items():
+            try:
+                pages[name] = {"url": p.url, "title": await p.title()}
+            except Exception:
+                pages[name] = {"url": "unknown", "title": "unknown"}
+        persistent = [s["name"] for s in browser_manager._persistent_scripts]
+        return {
+            "browser_running": running,
+            "contexts": contexts,
+            "pages": pages,
+            "active_page": browser_manager.active_page_name,
+            "network_capture": {
+                "active": browser_manager._capturing,
+                "pattern": browser_manager._capture_pattern,
+                "capture_body": browser_manager._capture_body,
+                "captured_count": len(browser_manager._network_requests),
+            },
+            "persistent_scripts": persistent,
+            "init_scripts_count": len(browser_manager._init_scripts),
+            "console_log_count": len(browser_manager._console_logs),
         }
     except Exception as e:
         return {"error": str(e)}

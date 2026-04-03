@@ -7,14 +7,8 @@ from ..server import mcp, browser_manager
 
 @mcp.tool()
 async def get_fingerprint_info() -> dict:
-    """Get the current browser fingerprint information.
-
-    Reads navigator, screen, WebGL, and canvas fingerprint data from the browser
-    to verify what fingerprint the anti-detection engine is presenting.
-
-    Returns:
-        dict with userAgent, platform, language, screen dimensions, WebGL info,
-        canvas fingerprint hash, and other fingerprint markers.
+    """Get the current browser fingerprint: navigator, screen, WebGL, canvas, etc.
+    Use to verify the anti-detection fingerprint being presented.
     """
     try:
         page = await browser_manager.get_active_page()
@@ -65,19 +59,10 @@ async def get_fingerprint_info() -> dict:
 
 @mcp.tool()
 async def check_detection(url: str = "https://bot.sannysoft.com") -> dict:
-    """Navigate to a bot detection site and take a screenshot to verify anti-detection.
-
-    Opens a fingerprint/bot detection site (default: bot.sannysoft.com) and
-    captures a screenshot for visual inspection of detection results.
+    """Navigate to a bot detection site and screenshot to verify anti-detection.
 
     Args:
-        url: Detection site URL. Common choices:
-            - "https://bot.sannysoft.com" (default)
-            - "https://browserscan.net"
-            - "https://abrahamjuliot.github.io/creepjs/"
-
-    Returns:
-        dict with screenshot_base64 and any detected issues.
+        url: Detection site URL (default: bot.sannysoft.com).
     """
     try:
         page = await browser_manager.get_active_page()

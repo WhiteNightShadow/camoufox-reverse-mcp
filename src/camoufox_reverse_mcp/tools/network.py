@@ -84,13 +84,13 @@ async def list_network_requests(
                 body_size = len(r["response_body"])
             summaries.append({
                 "id": r["id"],
-                "url": r["url"],
+                "url": r["url"][:200],
                 "method": r["method"],
                 "status": r.get("status"),
-                "resource_type": r.get("resource_type"),
-                "duration": r.get("duration"),
+                "type": r.get("resource_type"),
+                "ms": r.get("duration"),
                 "size": body_size,
-                "has_body": r.get("response_body") is not None,
+                "has_body": body_size > 0,
             })
         return summaries
     except Exception as e:
@@ -101,16 +101,17 @@ async def list_network_requests(
 async def get_network_request(
     request_id: int,
     include_body: bool = True,
+    include_headers: bool = True,
 ) -> dict:
     """Get full details of a specific captured network request.
 
     Args:
         request_id: The ID of the request (from list_network_requests).
-        include_body: Whether to include the response body in the result (default True).
-            Set to False for large responses to save tokens.
+        include_body: Include response body (default True). Set False for large responses.
+        include_headers: Include request/response headers (default True). Set False to save tokens.
 
     Returns:
-        dict with complete request and response details including headers and body.
+        dict with request and response details.
     """
     try:
         for r in browser_manager._network_requests:
@@ -121,6 +122,9 @@ async def get_network_request(
                     result["response_body_available"] = body is not None
                     if body:
                         result["response_body_size"] = len(body)
+                if not include_headers:
+                    result.pop("request_headers", None)
+                    result.pop("response_headers", None)
                 return result
         return {"error": f"Request ID {request_id} not found"}
     except Exception as e:
@@ -130,20 +134,11 @@ async def get_network_request(
 @mcp.tool()
 async def get_request_initiator(request_id: int) -> dict:
     """Get the JS call stack that initiated a network request.
-
-    This is the golden path for locating encryption functions:
-    see an encrypted parameter in a request -> get_request_initiator ->
-    find the signing function in the call stack.
-
-    Requires XHR/fetch hooks to be injected first. Use inject_hook_preset("xhr")
-    and/or inject_hook_preset("fetch") with persistent=True BEFORE navigating
-    to the target page.
+    Golden path: see encrypted param → get_request_initiator → find signing function.
+    Requires inject_hook_preset("xhr"/"fetch") BEFORE navigating.
 
     Args:
         request_id: The ID of the request.
-
-    Returns:
-        dict with url, initiator_stack, and initiator_type.
     """
     try:
         target_entry = None
@@ -242,22 +237,14 @@ async def intercept_request(
     modify_body: str | None = None,
     mock_response: dict | None = None,
 ) -> dict:
-    """Intercept network requests matching a pattern and perform an action.
+    """Intercept network requests matching a pattern.
 
     Args:
-        url_pattern: URL glob pattern to match (e.g. "**/api/login*").
-        action: What to do with matched requests:
-            - "log": Log the request without modifying it.
-            - "block": Block the request entirely.
-            - "modify": Modify request headers or body before sending.
-            - "mock": Return a mock response without sending the real request.
-        modify_headers: Headers to add/override (only for action="modify").
-        modify_body: Request body replacement (only for action="modify").
-        mock_response: Mock response dict with "status", "headers", "body"
-            (only for action="mock").
-
-    Returns:
-        dict with status, pattern, and action.
+        url_pattern: URL glob pattern (e.g. "**/api/login*").
+        action: "log", "block", "modify", or "mock".
+        modify_headers: Headers to add/override (action="modify").
+        modify_body: Request body replacement (action="modify").
+        mock_response: Dict with "status", "headers", "body" (action="mock").
     """
     try:
         page = await browser_manager.get_active_page()
@@ -314,5 +301,160 @@ async def stop_intercept(url_pattern: str | None = None) -> dict:
         else:
             await page.unroute("**/*")
             return {"status": "stopped_all"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def search_response_body(
+    keyword: str,
+    url_filter: str | None = None,
+    max_results: int = 20,
+) -> dict:
+    """Search for a keyword across all captured response bodies.
+
+    Requires start_network_capture(capture_body=True) to have been called first.
+
+    Args:
+        keyword: Substring to search for in response bodies (case-insensitive).
+        url_filter: Optional URL substring to narrow the search scope.
+        max_results: Maximum matches to return (default 20).
+
+    Returns:
+        dict with matches (request id, url, context around match) and total count.
+    """
+    try:
+        reqs = list(browser_manager._network_requests)
+        if url_filter:
+            reqs = [r for r in reqs if url_filter in r["url"]]
+
+        matches = []
+        kw_lower = keyword.lower()
+        for r in reqs:
+            body = r.get("response_body")
+            if not body:
+                continue
+            body_lower = body.lower()
+            pos = 0
+            while pos < len(body_lower) and len(matches) < max_results:
+                idx = body_lower.find(kw_lower, pos)
+                if idx == -1:
+                    break
+                start = max(0, idx - 80)
+                end = min(len(body), idx + len(keyword) + 80)
+                matches.append({
+                    "request_id": r["id"],
+                    "url": r["url"][:200],
+                    "offset": idx,
+                    "context": body[start:end],
+                })
+                pos = idx + len(keyword)
+
+        return {"keyword": keyword, "matches": matches, "total": len(matches)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def get_response_body_page(
+    request_id: int,
+    offset: int = 0,
+    length: int = 10000,
+) -> dict:
+    """Read a slice of a captured response body for paginated viewing of large responses.
+
+    Args:
+        request_id: The request ID (from list_network_requests).
+        offset: Character offset to start reading from (default 0).
+        length: Number of characters to read (default 10000, max 50000).
+
+    Returns:
+        dict with body slice, total size, and whether more data is available.
+    """
+    try:
+        if length > 50000:
+            length = 50000
+        for r in browser_manager._network_requests:
+            if r["id"] == request_id:
+                body = r.get("response_body")
+                if body is None:
+                    return {"error": "No body captured. Use start_network_capture(capture_body=True)."}
+                total = len(body)
+                slice_ = body[offset:offset + length]
+                return {
+                    "body": slice_,
+                    "offset": offset,
+                    "length": len(slice_),
+                    "total_size": total,
+                    "has_more": offset + length < total,
+                }
+        return {"error": f"Request ID {request_id} not found"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def search_json_path(
+    request_id: int,
+    json_path: str,
+) -> dict:
+    """Extract a value from a captured JSON response body by dot-notation path.
+
+    Supports array indexing like "data.items[0].name" or "data.list[*].id"
+    (wildcard returns all matching values).
+
+    Args:
+        request_id: The request ID.
+        json_path: Dot-notation path, e.g. "data.token", "result[0].sign",
+            "data[*].id" (wildcard collects all).
+
+    Returns:
+        dict with the extracted value(s) and the path used.
+    """
+    try:
+        body_text = None
+        for r in browser_manager._network_requests:
+            if r["id"] == request_id:
+                body_text = r.get("response_body")
+                break
+        if body_text is None:
+            return {"error": f"Request ID {request_id} not found or no body captured."}
+
+        data = json.loads(body_text)
+
+        def _extract(obj, parts):
+            if not parts:
+                return obj
+            part = parts[0]
+            rest = parts[1:]
+            # handle array index like "items[0]" or "items[*]"
+            if "[" in part:
+                key, idx_str = part.split("[", 1)
+                idx_str = idx_str.rstrip("]")
+                obj = obj[key] if key else obj
+                if idx_str == "*":
+                    if not isinstance(obj, list):
+                        return {"error": f"Not an array at '{key}'"}
+                    return [_extract(item, rest) for item in obj]
+                else:
+                    return _extract(obj[int(idx_str)], rest)
+            else:
+                if isinstance(obj, dict):
+                    return _extract(obj[part], rest)
+                return _extract(getattr(obj, part), rest)
+
+        parts = json_path.split(".")
+        result = _extract(data, parts)
+
+        result_str = json.dumps(result, ensure_ascii=False, default=str)
+        if len(result_str) > 20000:
+            result_str = result_str[:20000] + f"... (truncated, total {len(result_str)} chars)"
+            return {"path": json_path, "value_preview": result_str}
+
+        return {"path": json_path, "value": result}
+    except json.JSONDecodeError:
+        return {"error": "Response body is not valid JSON."}
+    except (KeyError, IndexError, TypeError) as e:
+        return {"error": f"Path '{json_path}' not found: {e}"}
     except Exception as e:
         return {"error": str(e)}

@@ -56,7 +56,19 @@ class BrowserManager:
     async def launch(self, config: dict | None = None) -> dict:
         """Launch the Camoufox browser with the given or default config."""
         if self.browser is not None:
-            return {"status": "already_running"}
+            pages_info = {}
+            for name, p in self.pages.items():
+                try:
+                    pages_info[name] = p.url
+                except Exception:
+                    pages_info[name] = "unknown"
+            return {
+                "status": "already_running",
+                "active_page": self.active_page_name,
+                "pages": pages_info,
+                "contexts": list(self.contexts.keys()),
+                "capturing": self._capturing,
+            }
 
         from camoufox.async_api import AsyncCamoufox
 

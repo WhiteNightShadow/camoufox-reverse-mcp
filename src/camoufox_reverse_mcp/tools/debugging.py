@@ -5,22 +5,12 @@ from ..server import mcp, browser_manager
 
 @mcp.tool()
 async def evaluate_js(expression: str, await_promise: bool = True) -> dict:
-    """Execute an arbitrary JavaScript expression in the page context and return the result.
-
-    This is the most fundamental and powerful tool for reverse engineering.
-    Use it to inspect variables, call functions, check prototypes, etc.
-
-    Examples:
-        - evaluate_js("window._token")
-        - evaluate_js("window.encrypt('test')")
-        - evaluate_js("Object.getOwnPropertyNames(XMLHttpRequest.prototype)")
+    """Execute arbitrary JS in the page context. The core tool for inspecting
+    variables, calling functions, checking prototypes, etc.
 
     Args:
         expression: JavaScript expression to evaluate.
         await_promise: If True, awaits Promise results (default True).
-
-    Returns:
-        dict with result value and its JavaScript type.
     """
     try:
         page = await browser_manager.get_active_page()
@@ -49,16 +39,11 @@ async def evaluate_js(expression: str, await_promise: bool = True) -> dict:
 
 @mcp.tool()
 async def evaluate_js_handle(expression: str) -> dict:
-    """Execute a JavaScript expression and return a structured view of the result object.
-
-    Unlike evaluate_js, this preserves complex object references and enumerates
-    their properties, useful for inspecting DOM elements, prototypes, etc.
+    """Execute JS and return a structured view of the result. Unlike evaluate_js,
+    this preserves complex object references and enumerates properties.
 
     Args:
         expression: JavaScript expression to evaluate.
-
-    Returns:
-        dict with the object's properties (name, type, value preview).
     """
     try:
         page = await browser_manager.get_active_page()
@@ -84,18 +69,14 @@ async def add_init_script(
     persistent: bool = False,
     name: str | None = None,
 ) -> dict:
-    """Inject a script that runs automatically before any page JavaScript on every navigation.
-
-    This is the core method for installing hooks — the hook code runs before
-    the target site's JS loads, ensuring interception is in place.
+    """Inject a script that runs before any page JS on every navigation.
+    Core method for installing hooks.
 
     Args:
         script: JavaScript code string to inject.
         path: Path to a .js file to inject (alternative to script).
-        persistent: If True, inject at context level so the script survives page
-            navigation, new tabs, and reload automatically. Recommended for hooks
-            that must always be present.
-        name: Optional identifier for persistent scripts (for later removal).
+        persistent: If True, script survives navigation/reload (context-level).
+        name: Optional identifier for persistent scripts.
 
     Returns:
         dict with status and the method used (inline or file path).
@@ -182,19 +163,13 @@ async def set_breakpoint_via_hook(
     persistent: bool = False,
 ) -> dict:
     """Set a pseudo-breakpoint on a function via JS hooking.
-
-    When the target function is called, captures its arguments, call stack,
-    this context, timestamp, and return value. Data is stored in
-    window.__mcp_breakpoints and can be retrieved with get_breakpoint_data.
+    Captures args, call stack, this context, timestamp, return value.
+    Retrieve data with get_breakpoint_data.
 
     Args:
-        target_function: Full path to the function (e.g. "window.encrypt",
-            "XMLHttpRequest.prototype.open").
-        script_url_pattern: Optional URL pattern to limit which scripts are affected.
-        persistent: If True, the breakpoint survives page navigation.
-
-    Returns:
-        dict with status and the target function name.
+        target_function: Full path (e.g. "window.encrypt").
+        script_url_pattern: Optional URL pattern to limit scope.
+        persistent: If True, survives page navigation.
     """
     try:
         hook_js = f"""(() => {{
