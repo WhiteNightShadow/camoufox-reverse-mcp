@@ -101,6 +101,7 @@ def test_new_hook_files_exist():
     new_files = [
         "cookie_hook.js",
         "runtime_probe.js",
+        "jsvmp_transparent_hook.js",
     ]
     for f in new_files:
         assert os.path.exists(os.path.join(hooks_dir, f)), f"Missing hook file: {f}"
@@ -270,4 +271,4 @@ async def test_pre_inject_jsvmp_probe_registers():
 
 def test_version_is_040():
     from camoufox_reverse_mcp import __version__
-    assert __version__ == "0.4.3"
+    assert __version__ == "0.5.0"

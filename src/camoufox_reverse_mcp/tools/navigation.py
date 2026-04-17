@@ -227,6 +227,17 @@ async def _inject_hook_by_name(name: str) -> tuple[bool, str]:
                 .replace("'{{PROXY_OBJECTS}}'", _json.dumps(_json.dumps(default_proxy)))
             )
             persist_name = "pre_inject:jsvmp_probe"
+        elif name == "jsvmp_probe_transparent":
+            hook_path = os.path.join(hooks_dir, "jsvmp_transparent_hook.js")
+            if not os.path.exists(hook_path):
+                return False, "jsvmp_transparent_hook.js not found"
+            with open(hook_path, "r", encoding="utf-8") as f:
+                tpl = f.read()
+            js = (tpl
+                .replace("{{SCRIPT_URL}}", "")
+                .replace("{{MAX_ENTRIES}}", "10000")
+            )
+            persist_name = "pre_inject:jsvmp_probe_transparent"
         elif name in preset_files:
             fpath = os.path.join(hooks_dir, preset_files[name])
             if not os.path.exists(fpath):

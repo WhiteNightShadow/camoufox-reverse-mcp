@@ -10,13 +10,14 @@ from ..server import mcp, browser_manager
 async def hook_jsvmp_interpreter(
     script_url: str = "",
     persistent: bool = True,
+    mode: str = "proxy",
     track_calls: bool = True,
     track_props: bool = True,
     track_reflect: bool = True,
     proxy_objects: list[str] | None = None,
     max_entries: int = 10000,
 ) -> dict:
-    """Install a universal JSVMP runtime probe.
+    """Install a JSVMP runtime probe.
 
     Multi-path instrumentation that covers how JSVMP interpreters interact
     with the host environment. Unlike simple apply-hook approaches, this
@@ -33,20 +34,11 @@ async def hook_jsvmp_interpreter(
     JS APIs, use instrument_jsvmp_source for source-level instrumentation.
 
     LIMITATIONS — READ BEFORE USING:
-        This tool installs Proxies on global objects (navigator, screen, ...)
+        This tool's default "proxy" mode installs Proxies on global objects
         and overrides Function.prototype.apply/call/bind. These modifications
-        are DETECTABLE by any JS that:
-          - Compares Function.prototype.apply.toString() against a known
-            native pattern
-          - Inspects Object.getOwnPropertyDescriptors(navigator) shape
-          - Uses navigator as input to a cryptographic hash (sensor_data,
-            Rui Shu sdenv fingerprinting)
-
-        For "environment-as-signature" anti-bot systems (Rui Shu 5/6,
-        Akamai sensor_data v3+, Shape Security), this tool IS NOT
-        RECOMMENDED. The observation changes the environment, the computed
-        signature diverges from what the server expects, and the challenge
-        never passes (symptoms: repeated 412 in redirect_chain).
+        are DETECTABLE by signature-based anti-bot (Rui Shu 5/6, Akamai
+        sensor_data v3+, Shape Security). Symptoms: repeated 412 in
+        redirect_chain, challenge never passes.
 
         Recommended alternatives for signature-based anti-bot:
           1. instrument_jsvmp_source(mode="ast") — rewrites JS source,
@@ -56,75 +48,117 @@ async def hook_jsvmp_interpreter(
              changes. Lower coverage but typically undetectable.
 
     Args:
-        script_url: Target script URL substring for stack filtering. Empty
-            string means "record every call from any script". Recommended:
-            pass the VMP file basename (e.g. "webmssdk.es5.js").
-        persistent: If True (default), survives navigation via context-level
-            init_script AND also injects into the current page immediately.
-        track_calls: Hook Function.prototype.apply/call/bind + Date.now etc.
-        track_props: Install Proxy on globals (navigator, screen, ...) to
-            catch every property read the VMP performs.
-        track_reflect: Hook Reflect.apply/get/set/construct (covers ES6 VMPs
-            that bypass Function.prototype.apply entirely).
-        proxy_objects: Global object names to wrap with Proxy. Default:
-            ["navigator", "screen", "history", "localStorage", "sessionStorage",
-             "performance"]. "document" is NOT included by default because
-            wrapping it often breaks pages; use cookie_hook for that.
+        script_url: Target script URL substring for stack filtering.
+        persistent: Survive navigation via context-level init_script.
+        mode: Observation strategy:
+            - "proxy"        (default) - full coverage using Proxy on globals
+              + Function.prototype.apply/call override. DETECTABLE by
+              signature-based anti-bot. Use for TikTok / obfuscator.io.
+            - "transparent"  - prototype-getter replacement only. No Proxy,
+              no Function.prototype changes. Lower coverage but dramatically
+              less detectable. Try this first for Rui Shu / Akamai.
+        track_calls, track_props, track_reflect, proxy_objects:
+            Only apply when mode="proxy". Ignored for "transparent".
         max_entries: Log buffer cap (default 10000).
 
     Returns:
-        dict with status, coverage summary, and data location.
+        dict with status, mode, coverage summary, data location.
     """
     try:
-        if proxy_objects is None:
-            proxy_objects = ["navigator", "screen", "history",
-                             "localStorage", "sessionStorage", "performance"]
-
         hooks_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "hooks")
-        with open(os.path.join(hooks_dir, "jsvmp_hook.js"), "r", encoding="utf-8") as f:
-            template = f.read()
-
-        hook_js = (template
-            .replace("{{SCRIPT_URL}}", script_url.replace('"', '\\"').replace("'", "\\'"))
-            .replace("{{MAX_ENTRIES}}", str(max_entries))
-            .replace("{{TRACK_CALLS}}", "true" if track_calls else "false")
-            .replace("{{TRACK_PROPS}}", "true" if track_props else "false")
-            .replace("{{TRACK_REFLECT}}", "true" if track_reflect else "false")
-            .replace("'{{PROXY_OBJECTS}}'", json.dumps(json.dumps(proxy_objects)))
-        )
-
         page = await browser_manager.get_active_page()
 
-        if persistent:
-            await browser_manager.add_persistent_script(f"jsvmp_probe:{script_url or 'all'}", hook_js)
+        if mode == "transparent":
+            hook_path = os.path.join(hooks_dir, "jsvmp_transparent_hook.js")
+            if not os.path.exists(hook_path):
+                return {"error": "jsvmp_transparent_hook.js not found"}
+            with open(hook_path, "r", encoding="utf-8") as f:
+                template = f.read()
 
-        # 关键: 无论 persistent 与否,都对当前页面立即 evaluate,
-        # 保证后续 reload / 下一次请求时 hook 已经就位
-        try:
-            await page.evaluate(hook_js)
-        except Exception as e:
+            hook_js = (template
+                .replace("{{SCRIPT_URL}}", script_url.replace('"', '\\"').replace("'", "\\'"))
+                .replace("{{MAX_ENTRIES}}", str(max_entries))
+            )
+
+            if persistent:
+                await browser_manager.add_persistent_script(
+                    f"jsvmp_transparent:{script_url or 'all'}", hook_js)
+            try:
+                await page.evaluate(hook_js)
+            except Exception as e:
+                return {
+                    "status": "partial",
+                    "mode": "transparent",
+                    "warning": f"Evaluate on current page failed: {e}",
+                    "persistent": persistent,
+                    "note": "Hook is registered for future pages via add_init_script.",
+                }
             return {
-                "status": "partial",
-                "warning": f"Evaluate on current page failed (may have no page loaded yet): {e}",
+                "status": "instrumented",
+                "mode": "transparent",
+                "script_url": script_url or "(all scripts)",
                 "persistent": persistent,
-                "script_url": script_url,
+                "coverage": {
+                    "prototype_getters": True,
+                    "function_prototype": False,
+                    "reflect_apis": False,
+                    "proxy_objects": [],
+                    "note": "Only prototype getters on Navigator/Screen/"
+                            "Document etc. are tapped. Signature-safe.",
+                },
+                "data_location": "window.__mcp_jsvmp_log",
             }
 
-        return {
-            "status": "instrumented",
-            "script_url": script_url or "(all scripts)",
-            "persistent": persistent,
-            "coverage": {
-                "function_prototype": track_calls,
-                "reflect_apis": track_reflect,
-                "property_proxies": track_props,
-                "proxy_objects": proxy_objects if track_props else [],
-                "timing_apis": track_calls,
-            },
-            "data_location": "window.__mcp_jsvmp_log",
-            "note": "If your target script loads BEFORE this install, call "
-                    "reload_with_hooks() afterwards so the probe runs first.",
-        }
+        elif mode == "proxy":
+            if proxy_objects is None:
+                proxy_objects = ["navigator", "screen", "history",
+                                 "localStorage", "sessionStorage", "performance"]
+
+            with open(os.path.join(hooks_dir, "jsvmp_hook.js"), "r", encoding="utf-8") as f:
+                template = f.read()
+
+            hook_js = (template
+                .replace("{{SCRIPT_URL}}", script_url.replace('"', '\\"').replace("'", "\\'"))
+                .replace("{{MAX_ENTRIES}}", str(max_entries))
+                .replace("{{TRACK_CALLS}}", "true" if track_calls else "false")
+                .replace("{{TRACK_PROPS}}", "true" if track_props else "false")
+                .replace("{{TRACK_REFLECT}}", "true" if track_reflect else "false")
+                .replace("'{{PROXY_OBJECTS}}'", json.dumps(json.dumps(proxy_objects)))
+            )
+
+            if persistent:
+                await browser_manager.add_persistent_script(
+                    f"jsvmp_probe:{script_url or 'all'}", hook_js)
+            try:
+                await page.evaluate(hook_js)
+            except Exception as e:
+                return {
+                    "status": "partial",
+                    "mode": "proxy",
+                    "warning": f"Evaluate on current page failed: {e}",
+                    "persistent": persistent,
+                    "script_url": script_url,
+                }
+            return {
+                "status": "instrumented",
+                "mode": "proxy",
+                "script_url": script_url or "(all scripts)",
+                "persistent": persistent,
+                "coverage": {
+                    "function_prototype": track_calls,
+                    "reflect_apis": track_reflect,
+                    "property_proxies": track_props,
+                    "proxy_objects": proxy_objects if track_props else [],
+                    "timing_apis": track_calls,
+                },
+                "data_location": "window.__mcp_jsvmp_log",
+                "warning": "proxy mode is detectable by signature-based anti-bot. "
+                           "If target is Rui Shu/Akamai, use mode='transparent' "
+                           "or instrument_jsvmp_source instead.",
+            }
+
+        else:
+            return {"error": f"unknown mode '{mode}', use 'proxy' or 'transparent'"}
     except Exception as e:
         return {"error": str(e)}
 
