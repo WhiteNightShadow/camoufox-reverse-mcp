@@ -243,6 +243,7 @@ async def inject_hook_preset(preset: str, persistent: bool = True) -> dict:
         "crypto": "crypto_hook.js",
         "websocket": "websocket_hook.js",
         "debugger_bypass": "debugger_trap.js",
+        "cookie": "cookie_hook.js",
     }
 
     if preset not in preset_map:
