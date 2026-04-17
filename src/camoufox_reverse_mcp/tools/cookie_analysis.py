@@ -8,7 +8,7 @@ Cookies can enter the jar via:
 
 This module correlates captured network responses with client-side
 cookie writes to explain where each cookie came from. Critical for
-understanding Rui Shu / Akamai cookie flows where the JS computes
+understanding signature-based anti-bot cookie flows where the JS computes
 a token but the HTTP layer is where the cookie actually gets set.
 """
 from __future__ import annotations

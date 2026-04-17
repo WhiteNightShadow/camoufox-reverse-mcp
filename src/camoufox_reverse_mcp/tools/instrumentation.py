@@ -102,9 +102,9 @@ async def instrument_jsvmp_source(
 
     Args:
         url_pattern: Glob pattern matching the VMP script URL(s), e.g.:
-            "**/webmssdk.es5.js"
-            "**/FuckCookie_*.js"
-            "https://target.com/sdenv-*.js"
+            "**/vmp_target.es5.js"
+            "**/challenge_*.js"
+            "https://target-site.example.com/vmp_target*.js"
         mode: One of:
             - "ast"       — (default) AST rewrite via MCP-side esprima.
                             Zero page-side dependencies, works on 412 pages

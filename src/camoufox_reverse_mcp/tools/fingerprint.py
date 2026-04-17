@@ -67,14 +67,13 @@ async def get_fingerprint_info() -> dict:
 async def check_detection(url: str = "https://bot.sannysoft.com") -> dict:
     """Navigate to a bot detection site and take a screenshot to verify anti-detection.
 
-    Opens a fingerprint/bot detection site (default: bot.sannysoft.com) and
-    captures a screenshot for visual inspection of detection results.
+    Opens a fingerprint/bot detection test site and captures a screenshot
+    for visual inspection of detection results.
 
     Args:
         url: Detection site URL. Common choices:
-            - "https://bot.sannysoft.com" (default)
-            - "https://browserscan.net"
-            - "https://abrahamjuliot.github.io/creepjs/"
+            - "https://bot.sannysoft.com" (default) — bot detection test site
+            - Other fingerprint detection sites
 
     Returns:
         dict with screenshot_base64 and any detected issues.

@@ -20,7 +20,7 @@ An MCP (Model Context Protocol) server that gives AI coding assistants (Claude C
 - Camoufox modifies fingerprint information at the **C++ engine level**, not JS patches
 - Juggler protocol sandbox isolation makes Playwright **completely undetectable** by page JS
 - BrowserForge generates fingerprints based on **real-world traffic distribution**
-- Works on sites with strong bot detection: Rui Shu, GeeTest, Cloudflare, etc.
+- Works on sites with strong bot detection: signature-based anti-bot, behavioral verification, WAF-based anti-bot, etc.
 - Hooks use `Object.defineProperty` with **override protection**, page scripts cannot restore original methods
 
 ---
@@ -210,9 +210,9 @@ python -m camoufox_reverse_mcp \
 >
 > | Anti-Bot Type | Examples | ✅ Recommended | ❌ Do NOT Use |
 > |---|---|---|---|
-> | **Signature-based** (env = signature) | Rui Shu 5/6, Akamai sensor_data v3+, Shape Security | `instrument_jsvmp_source(mode="ast")` + `analyze_cookie_sources()` | `pre_inject_hooks`, `hook_jsvmp_interpreter(mode="proxy")` |
-> | **Behavior-based** (param signature) | TikTok webmssdk, GeeTest gt4 | `hook_jsvmp_interpreter(mode="proxy")` full coverage | — |
-> | **Pure obfuscation** | obfuscator.io, custom VMP without fingerprinting | Any combination | — |
+> | **Signature-based** (env = signature) | Signature-based anti-bot 5/6, sensor_data-style signature v3+ | `instrument_jsvmp_source(mode="ast")` + `analyze_cookie_sources()` | `pre_inject_hooks`, `hook_jsvmp_interpreter(mode="proxy")` |
+> | **Behavior-based** (param signature) | Behavior-based anti-bot sites JSVMP, behavioral verification gt4 | `hook_jsvmp_interpreter(mode="proxy")` full coverage | — |
+> | **Pure obfuscation** | JS obfuscation tools, custom VMP without fingerprinting | Any combination | — |
 >
 > **How to identify**: `navigate()` without pre_inject, check `redirect_chain`. Repeated 412 or 302 loops → signature-based, use source instrumentation.
 - `hook_jsvmp_interpreter` — **[Enhanced]** Universal JSVMP runtime probe: apply/call/bind + Reflect.* + Proxy property tracking
@@ -278,13 +278,13 @@ AI workflow:
 2. bypass_debugger_trap()                ← Bypass anti-debugging first
 3. inject_hook_preset("xhr")             ← Persistent hook
 4. inject_hook_preset("fetch")           ← Persistent hook
-5. hook_jsvmp_interpreter("webmssdk.es5.js")  ← JSVMP instrumentation
+5. hook_jsvmp_interpreter("vmp_target.es5.js")  ← JSVMP instrumentation
 6. trace_property_access(["navigator.*", "screen.*", "document.cookie"])
 7. navigate("https://target.com")
 8. Trigger target actions (pagination, search, etc.)
 9. get_jsvmp_log()                       ← See which APIs JSVMP accesses
 10. get_property_access_log()            ← See which env properties are read
-11. dump_jsvmp_strings("webmssdk.es5.js") ← Extract string table
+11. dump_jsvmp_strings("vmp_target.es5.js") ← Extract string table
 12. compare_env()                        ← Collect browser env for Node.js comparison
 13. Reconstruct algorithm from API calls and property access records
 ```
@@ -294,9 +294,9 @@ AI workflow:
 ```
 AI workflow:
 1. launch_browser(os_type="windows", humanize=True)
-2. check_detection()                     ← Open bot.sannysoft.com and screenshot
+2. check_detection()                     ← Open bot detection test site and screenshot
 3. get_fingerprint_info()                ← View detailed fingerprint
-4. navigate("https://browserscan.net")   ← Test more detection sites
+4. navigate("https://fingerprint-test.example.com")   ← Test more detection sites
 5. take_screenshot(full_page=True)
 ```
 
@@ -330,7 +330,7 @@ AI workflow:
 9. get_page_content()                             ← Export rendered HTML + visible text
 ```
 
-### Scenario 6: Universal JSVMP Reverse Engineering (Rui Shu 6 / Akamai / Custom VMP)
+### Scenario 6: Universal JSVMP Reverse Engineering (Signature-Based Anti-Bot / Custom VMP)
 
 The recommended JSVMP analysis workflow — works on virtually all VMP types.
 
@@ -338,10 +338,10 @@ The recommended JSVMP analysis workflow — works on virtually all VMP types.
 AI workflow:
 1. launch_browser(headless=False)
 2. start_network_capture(capture_body=True)
-3. navigate("https://target.com/")           ← First visit to locate VMP script
+3. navigate("https://target-site.example.com/")           ← First visit to locate VMP script
 4. list_network_requests(resource_type="script")
-5. find_dispatch_loops(script_url="https://target.com/sdenv-xxx.js")
-6. instrument_jsvmp_source("**/sdenv-*.js", mode="ast", tag="vmp1")
+5. find_dispatch_loops(script_url="https://target-site.example.com/vmp_target-xxx.js")
+6. instrument_jsvmp_source("**/vmp_target*.js", mode="ast", tag="vmp1")
 7. inject_hook_preset("cookie", persistent=True)
 8. inject_hook_preset("xhr", persistent=True)
 9. reload_with_hooks()                       ← Re-run with instrumentation hot
@@ -376,7 +376,7 @@ AI workflow:
 
 ### v0.5.0 (2026-04-18) — Signature-Based Anti-Bot Compatibility
 
-> Fix the architectural issue where `pre_inject_hooks` breaks signature-based anti-bot (Rui Shu/Akamai). Add MCP-side AST rewriting, transparent observation mode, anti-bot type decision table, and JSVMP Playbook.
+> Fix the architectural issue where `pre_inject_hooks` breaks signature-based anti-bot. Add MCP-side AST rewriting, transparent observation mode, anti-bot type decision table, and JSVMP Playbook.
 
 **Architectural Improvements**
 - **`instrument_jsvmp_source` default changed to MCP-side esprima AST**: No CDN dependency, auto-fallback to regex on parse failure
