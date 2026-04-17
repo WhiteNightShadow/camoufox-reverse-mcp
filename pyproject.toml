@@ -20,3 +20,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/camoufox_reverse_mcp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
