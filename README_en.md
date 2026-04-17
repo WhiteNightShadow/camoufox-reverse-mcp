@@ -405,10 +405,6 @@ engineering? Add me on WeChat:
 
 - **WeChat ID**: `han8888v8888`
 
-<p align="left">
-  <img src="assets/wechat_qr.png" alt="WeChat QR" width="220" />
-</p>
-
 > Please note "camoufox-reverse" in your friend request so I can approve it quickly.
 
 ## License

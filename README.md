@@ -493,10 +493,6 @@ AI 操作链：
 
 - **微信号**：`han8888v8888`
 
-<p align="left">
-  <img src="assets/wechat_qr.png" alt="WeChat QR" width="220" />
-</p>
-
 > 加好友时烦请备注「camoufox-reverse」，方便快速通过。
 
 ## 许可证
