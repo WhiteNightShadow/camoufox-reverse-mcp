@@ -357,6 +357,21 @@ AI workflow:
 
 ## Changelog
 
+### v0.5.0 (2026-04-18) — Signature-Based Anti-Bot Compatibility
+
+> Fix the architectural issue where `pre_inject_hooks` breaks signature-based anti-bot (Rui Shu/Akamai). Add MCP-side AST rewriting, transparent observation mode, anti-bot type decision table, and JSVMP Playbook.
+
+**Architectural Improvements**
+- **`instrument_jsvmp_source` default changed to MCP-side esprima AST**: No CDN dependency, auto-fallback to regex on parse failure
+- **`hook_jsvmp_interpreter` new `mode="transparent"`**: Prototype-getter replacement only, no Proxy, no Function.prototype changes
+- **Anti-bot type decision table**: Signature/behavior/obfuscation types with recommended tool paths
+- **JSVMP Playbook**: Per-anti-bot-type workflow guide (`docs/JSVMP_PLAYBOOK.md`)
+
+**New Files**
+- `hooks/jsvmp_transparent_hook.js`, `utils/ast_rewriter.py`, `docs/JSVMP_PLAYBOOK.md`, `tests/test_ast_rewriter.py`
+
+**New Dependency**: `esprima>=4.0.1` (pure Python)
+
 ### v0.4.0 (2026-04-17) — Universal JSVMP Adaptation
 
 > Make this MCP a universal JSVMP reverse engineering weapon. Add source-level instrumentation, cookie attribution, runtime probe. Fix jsvmp_hook multi-path coverage and dump_jsvmp_strings regex. Tools: 57 → 65.

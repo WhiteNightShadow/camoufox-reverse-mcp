@@ -415,6 +415,31 @@ AI 操作链：
 
 ## 更新记录
 
+### v0.5.0（2026-04-18）— 签名型反爬兼容改造
+
+> 解决 `pre_inject_hooks` 对瑞数/Akamai 签名型反爬不可用的架构性问题。新增 MCP 侧 AST 改写、transparent 观察模式、反爬类型决策表和实战 Playbook。
+
+**架构性改进**
+- **`instrument_jsvmp_source` 默认改为 MCP 侧 esprima AST 改写**：不再依赖页面内 CDN（挑战页加载不到），AST 失败自动回落 regex
+- **`hook_jsvmp_interpreter` 新增 `mode="transparent"`**：只替换原型 getter，不装 Proxy、不动 Function.prototype，签名型反爬可用
+- **反爬类型决策表**：签名型/行为型/纯混淆各自推荐工具路径，避免用错工具导致挑战永远过不去
+- **JSVMP Playbook**：按反爬类型给出完整工作流（`docs/JSVMP_PLAYBOOK.md`）
+
+**新增文件**
+- `hooks/jsvmp_transparent_hook.js` — 签名安全的运行时观察器
+- `utils/ast_rewriter.py` — MCP 侧 esprima AST 改写器
+- `docs/JSVMP_PLAYBOOK.md` — 反爬类型识别与工作流指南
+- `tests/test_ast_rewriter.py` — AST 改写器单元测试
+
+**文档诚实度修正**
+- `hook_jsvmp_interpreter` docstring 加 LIMITATIONS 段，明确签名型反爬不可用
+- `navigate` 的 `pre_inject_hooks` 参数加 WARNING，说明症状和替代方案
+- `instrument_jsvmp_source` docstring 标注为签名型反爬首选
+- README 工具列表前插入反爬类型→工具路径对照表
+
+**新增依赖**
+- `esprima>=4.0.1`（纯 Python，零 C 扩展）
+
 ### v0.4.0（2026-04-17）— 通用 JSVMP 适配改造
 
 > 让本 MCP 成为通用 JSVMP 逆向武器。新增源码级插桩、Cookie 归因、运行时探针等核心能力，修复 jsvmp_hook 多路径覆盖和 dump_jsvmp_strings 正则问题。工具总数从 57 个增长至 65 个。
