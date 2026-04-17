@@ -8,48 +8,100 @@ from ..server import mcp, browser_manager
 
 @mcp.tool()
 async def hook_jsvmp_interpreter(
-    script_url: str,
+    script_url: str = "",
     persistent: bool = True,
+    track_calls: bool = True,
+    track_props: bool = True,
+    track_reflect: bool = True,
+    proxy_objects: list[str] | None = None,
+    max_entries: int = 10000,
 ) -> dict:
-    """Instrument a JSVMP-protected script to trace its interpreter execution.
+    """Install a universal JSVMP runtime probe.
 
-    Automatically hooks Function.prototype.apply/call and sensitive browser
-    property reads to log all external interactions made by the JSVMP
-    interpreter. This reveals which browser APIs and environment properties
-    the VM accesses, without needing to reverse-engineer the bytecode.
+    Multi-path instrumentation that covers how JSVMP interpreters interact
+    with the host environment. Unlike simple apply-hook approaches, this
+    probe also wraps Reflect.get/apply, installs Proxies on critical global
+    objects (navigator, screen, etc.), and intercepts timing/random APIs.
+
+    Works on:
+        - Rui Shu 5/6 (while+switch bytecode dispatch + direct calls)
+        - Akamai sensor_data v2/v3+
+        - TikTok webmssdk.es5
+        - obfuscator.io style VMPs
+        - Custom VMPs using Reflect.* or direct invocation
+
+    Scope: broad runtime probe. For VMP internals that bypass all hookable
+    JS APIs, use instrument_jsvmp_source for source-level instrumentation.
 
     Args:
-        script_url: URL of the JSVMP-protected script (e.g. "webmssdk.es5.js").
-            Can be a partial URL — matching uses 'includes'.
-        persistent: If True (default), instrumentation survives page navigation.
+        script_url: Target script URL substring for stack filtering. Empty
+            string means "record every call from any script". Recommended:
+            pass the VMP file basename (e.g. "webmssdk.es5.js").
+        persistent: If True (default), survives navigation via context-level
+            init_script AND also injects into the current page immediately.
+        track_calls: Hook Function.prototype.apply/call/bind + Date.now etc.
+        track_props: Install Proxy on globals (navigator, screen, ...) to
+            catch every property read the VMP performs.
+        track_reflect: Hook Reflect.apply/get/set/construct (covers ES6 VMPs
+            that bypass Function.prototype.apply entirely).
+        proxy_objects: Global object names to wrap with Proxy. Default:
+            ["navigator", "screen", "history", "localStorage", "sessionStorage",
+             "performance"]. "document" is NOT included by default because
+            wrapping it often breaks pages; use cookie_hook for that.
+        max_entries: Log buffer cap (default 10000).
 
     Returns:
-        dict with status and the script being monitored.
+        dict with status, coverage summary, and data location.
     """
     try:
+        if proxy_objects is None:
+            proxy_objects = ["navigator", "screen", "history",
+                             "localStorage", "sessionStorage", "performance"]
+
         hooks_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "hooks")
         with open(os.path.join(hooks_dir, "jsvmp_hook.js"), "r", encoding="utf-8") as f:
             template = f.read()
 
-        hook_js = template.replace("'{{SCRIPT_URL}}'", json.dumps(script_url))
+        hook_js = (template
+            .replace("{{SCRIPT_URL}}", script_url.replace('"', '\\"').replace("'", "\\'"))
+            .replace("{{MAX_ENTRIES}}", str(max_entries))
+            .replace("{{TRACK_CALLS}}", "true" if track_calls else "false")
+            .replace("{{TRACK_PROPS}}", "true" if track_props else "false")
+            .replace("{{TRACK_REFLECT}}", "true" if track_reflect else "false")
+            .replace("'{{PROXY_OBJECTS}}'", json.dumps(json.dumps(proxy_objects)))
+        )
+
+        page = await browser_manager.get_active_page()
 
         if persistent:
-            await browser_manager.add_persistent_script(f"jsvmp:{script_url}", hook_js)
-            page = await browser_manager.get_active_page()
+            await browser_manager.add_persistent_script(f"jsvmp_probe:{script_url or 'all'}", hook_js)
+
+        # 关键: 无论 persistent 与否,都对当前页面立即 evaluate,
+        # 保证后续 reload / 下一次请求时 hook 已经就位
+        try:
             await page.evaluate(hook_js)
-        else:
-            page = await browser_manager.get_active_page()
-            await page.evaluate(hook_js)
+        except Exception as e:
+            return {
+                "status": "partial",
+                "warning": f"Evaluate on current page failed (may have no page loaded yet): {e}",
+                "persistent": persistent,
+                "script_url": script_url,
+            }
 
         return {
             "status": "instrumented",
-            "script_url": script_url,
+            "script_url": script_url or "(all scripts)",
             "persistent": persistent,
-            "tracking": {
-                "api_calls": "Function.prototype.apply/call interception",
-                "property_reads": "navigator.*, screen.*, document.cookie, etc.",
-                "data_location": "window.__mcp_jsvmp_log",
+            "coverage": {
+                "function_prototype": track_calls,
+                "reflect_apis": track_reflect,
+                "property_proxies": track_props,
+                "proxy_objects": proxy_objects if track_props else [],
+                "timing_apis": track_calls,
             },
+            "data_location": "window.__mcp_jsvmp_log",
+            "note": "If your target script loads BEFORE this install, call "
+                    "reload_with_hooks() afterwards so the probe runs first.",
         }
     except Exception as e:
         return {"error": str(e)}
