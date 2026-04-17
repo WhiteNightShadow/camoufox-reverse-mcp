@@ -244,6 +244,7 @@ async def inject_hook_preset(preset: str, persistent: bool = True) -> dict:
         "websocket": "websocket_hook.js",
         "debugger_bypass": "debugger_trap.js",
         "cookie": "cookie_hook.js",
+        "runtime_probe": "runtime_probe.js",
     }
 
     if preset not in preset_map:
@@ -374,5 +375,46 @@ async def remove_hooks(keep_persistent: bool = False) -> dict:
         return {"status": "hooks_removed", "url": url,
                 "persistent_kept": keep_persistent,
                 "persistent_count": len(browser_manager._persistent_scripts)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def get_runtime_probe_log(
+    type_filter: str | None = None,
+    limit: int = 300,
+    clear: bool = False,
+) -> dict:
+    """Retrieve logs from runtime_probe.js.
+
+    Args:
+        type_filter: Filter by event type - "xhr_open", "xhr_send", "fetch",
+            "canvas_toDataURL", "canvas_getContext", "webgl_getParameter",
+            "nav_read", "addEventListener", etc.
+        limit: Max entries to return.
+        clear: Clear the log after retrieval.
+
+    Returns:
+        dict with entries, total count, and breakdown by type.
+    """
+    try:
+        page = await browser_manager.get_active_page()
+        data = await page.evaluate("window.__mcp_runtime_log || []")
+        if type_filter:
+            data = [d for d in data if d.get("type") == type_filter]
+
+        by_type: dict[str, int] = {}
+        for e in data:
+            t = e.get("type", "?")
+            by_type[t] = by_type.get(t, 0) + 1
+
+        if clear:
+            await page.evaluate("window.__mcp_runtime_log = []")
+
+        return {
+            "entries": data[-limit:] if len(data) > limit else data,
+            "total": len(data),
+            "by_type": dict(sorted(by_type.items(), key=lambda x: -x[1])),
+        }
     except Exception as e:
         return {"error": str(e)}
