@@ -340,6 +340,80 @@ async def dump_jsvmp_strings(script_url: str) -> dict:
 
 
 @mcp.tool()
+async def find_dispatch_loops(
+    script_url: str,
+    min_case_count: int = 20,
+) -> dict:
+    """Scan a JSVMP script for bytecode-dispatch-loop candidates.
+
+    A dispatch loop is a giant while(true) or for(;;) containing a switch
+    with many cases, typical of VMP interpreters. This tool extracts such
+    candidates so you can target them with instrument_jsvmp_source or
+    hook_function.
+
+    Args:
+        script_url: Full URL of the JS file (will be fetched by the browser).
+        min_case_count: Only report switches with at least this many cases.
+
+    Returns:
+        dict with candidates: [{fn_name, case_count, char_range, preview}]
+    """
+    try:
+        page = await browser_manager.get_active_page()
+
+        extractor = r"""
+        async (url, minCaseCount) => {
+            const resp = await fetch(url);
+            const src = await resp.text();
+
+            // Find every `switch(` and count its `case ` occurrences until
+            // matching `}` - naive but works for most minified VMPs.
+            const results = [];
+            const switchRe = /switch\s*\(/g;
+            let m;
+            while ((m = switchRe.exec(src)) !== null) {
+                // Find matching `{` after the switch's `)`
+                let i = m.index + m[0].length;
+                let depth = 1;
+                while (i < src.length && src[i] !== ')') i++;
+                if (i >= src.length) continue;
+                while (i < src.length && src[i] !== '{') i++;
+                if (i >= src.length) continue;
+                const start = i;
+                depth = 1; i++;
+                while (i < src.length && depth > 0) {
+                    if (src[i] === '{') depth++;
+                    else if (src[i] === '}') depth--;
+                    i++;
+                }
+                const end = i;
+                const body = src.slice(start, end);
+                const caseCount = (body.match(/\bcase\s+/g) || []).length;
+                if (caseCount >= minCaseCount) {
+                    // Look backwards for enclosing function name
+                    let back = m.index;
+                    const backSlice = src.slice(Math.max(0, back - 500), back);
+                    const fnMatch = backSlice.match(/function\s+([A-Za-z_$][\w$]*)/);
+                    const fnExprMatch = backSlice.match(/(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*function/);
+                    results.push({
+                        fn_name: (fnMatch && fnMatch[1]) || (fnExprMatch && fnExprMatch[1]) || null,
+                        case_count: caseCount,
+                        char_range: [start, end],
+                        preview: body.slice(0, 200).replace(/\s+/g, ' ')
+                    });
+                }
+            }
+            return { candidates: results, total: results.length,
+                     source_length: src.length };
+        }
+        """
+
+        return await page.evaluate(extractor, [script_url, min_case_count])
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
 async def compare_env(
     properties: list[str] | None = None,
 ) -> dict:
