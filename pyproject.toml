@@ -1,6 +1,6 @@
 [project]
 name = "camoufox-reverse-mcp"
-version = "0.4.2"
+version = "0.4.3"
 description = "Anti-detection browser MCP server for JavaScript reverse engineering"
 requires-python = ">=3.10"
 license = {text = "MIT"}

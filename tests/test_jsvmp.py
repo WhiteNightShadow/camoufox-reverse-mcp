@@ -204,72 +204,70 @@ def test_new_tools_registered():
     assert not missing, f"Missing tools: {missing}"
 
 
-# ============ pre_inject timeout protection ============
+# ============ pre_inject registration ============
 
 @pytest.mark.asyncio
-async def test_pre_inject_eval_timeout_does_not_hang():
-    """_inject_hook_by_name must not hang if page.evaluate blocks forever.
-
-    Regression: navigate(pre_inject_hooks=[...]) hung in v0.4.0 when evaluate
-    on about:blank wedged (e.g. cookie_hook descriptor walk on opaque origin,
-    jsvmp_probe Proxy install). Fix: asyncio.wait_for + JS try/catch +
-    fall-through to persistent registration being authoritative.
-    """
+async def test_pre_inject_registers_persistent_script():
+    """_inject_hook_by_name should register the hook as a persistent script
+    without attempting page.evaluate (no about:blank detour)."""
     import asyncio
     from unittest.mock import patch
     from camoufox_reverse_mcp.tools import navigation
 
     register_calls = []
 
-    async def _noop_register(name, content):
+    async def _mock_register(name, content):
         register_calls.append(name)
 
-    class _HangingPage:
-        async def evaluate(self, _js):
-            await asyncio.Event().wait()
+    with patch.object(navigation.browser_manager, "add_persistent_script", _mock_register):
+        ok, msg = await navigation._inject_hook_by_name("cookie_hook")
 
-    async def _get_page():
-        return _HangingPage()
-
-    with patch.object(navigation, "_PRE_INJECT_EVAL_TIMEOUT", 0.1), \
-         patch.object(navigation.browser_manager, "add_persistent_script", _noop_register), \
-         patch.object(navigation.browser_manager, "get_active_page", _get_page):
-        ok, msg = await asyncio.wait_for(
-            navigation._inject_hook_by_name("cookie_hook"), timeout=2.0
-        )
-
-    assert ok is True, f"should succeed via persistent registration, got msg={msg}"
-    assert "timed out" in msg.lower()
+    assert ok is True
+    assert msg == "ok"
     assert register_calls == ["pre_inject:cookie_hook"]
 
 
 @pytest.mark.asyncio
-async def test_pre_inject_js_exception_does_not_fail_registration():
-    """If the hook JS throws on about:blank, persistent registration still wins."""
+async def test_pre_inject_register_timeout():
+    """_inject_hook_by_name should fail gracefully if registration times out."""
     import asyncio
     from unittest.mock import patch
     from camoufox_reverse_mcp.tools import navigation
 
-    async def _noop_register(name, content):
-        pass
+    async def _hanging_register(name, content):
+        await asyncio.Event().wait()  # hang forever
 
-    class _ThrowingPage:
-        async def evaluate(self, _js):
-            raise RuntimeError("evaluate boom")
+    with patch.object(navigation, "_PRE_INJECT_REGISTER_TIMEOUT", 0.1), \
+         patch.object(navigation.browser_manager, "add_persistent_script", _hanging_register):
+        ok, msg = await asyncio.wait_for(
+            navigation._inject_hook_by_name("cookie_hook"), timeout=2.0
+        )
 
-    async def _get_page():
-        return _ThrowingPage()
+    assert ok is False
+    assert "timed out" in msg.lower()
 
-    with patch.object(navigation.browser_manager, "add_persistent_script", _noop_register), \
-         patch.object(navigation.browser_manager, "get_active_page", _get_page):
+
+@pytest.mark.asyncio
+async def test_pre_inject_jsvmp_probe_registers():
+    """jsvmp_probe special name should build JS from template and register."""
+    from unittest.mock import patch
+    from camoufox_reverse_mcp.tools import navigation
+
+    registered = {}
+
+    async def _mock_register(name, content):
+        registered[name] = content
+
+    with patch.object(navigation.browser_manager, "add_persistent_script", _mock_register):
         ok, msg = await navigation._inject_hook_by_name("jsvmp_probe")
 
     assert ok is True
-    assert "evaluate boom" in msg or "error" in msg.lower()
+    assert "pre_inject:jsvmp_probe" in registered
+    assert "__mcp_jsvmp_installed" in registered["pre_inject:jsvmp_probe"]
 
 
 # ============ Version ============
 
 def test_version_is_040():
     from camoufox_reverse_mcp import __version__
-    assert __version__ == "0.4.2"
+    assert __version__ == "0.4.3"

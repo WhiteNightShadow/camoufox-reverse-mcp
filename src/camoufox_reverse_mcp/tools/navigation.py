@@ -7,12 +7,8 @@ import os
 
 from ..server import mcp, browser_manager
 
-# Timeout for pre-inject operations on about:blank. Some hooks (jsvmp Proxy
-# install, cookie descriptor walk) can wedge on opaque-origin blank pages;
-# the persistent add_init_script path is what actually matters for the next
-# real navigation, so evaluate here is strictly best-effort.
-_PRE_INJECT_REGISTER_TIMEOUT = 5.0
-_PRE_INJECT_EVAL_TIMEOUT = 3.0
+# Timeout for persistent script registration during pre-inject.
+_PRE_INJECT_REGISTER_TIMEOUT = 10.0
 
 
 @mcp.tool()
@@ -82,32 +78,33 @@ async def navigate(
     url: str,
     wait_until: str = "load",
     pre_inject_hooks: list[str] | None = None,
-    via_blank: bool = False,
     collect_response_chain: bool = True,
 ) -> dict:
     """Navigate to a URL, with optional hook pre-injection and redirect tracing.
 
-    For sites that detect/challenge on the very first request (Rui Shu,
-    Akamai, etc.), normal `navigate` misses the initial JS because probes
-    inject AFTER the page loads. Use `pre_inject_hooks` to guarantee hooks
-    are installed before ANY target-site JS runs.
+    When pre_inject_hooks is provided, the flow is:
+      1. Register hooks as persistent context-level scripts
+      2. Navigate normally to the target URL (no about:blank detour)
+      3. Auto-reload so hooks fire BEFORE the target site's JS on the
+         second load
+
+    This "navigate-then-reload" approach avoids the about:blank detour that
+    broke Rui Shu / Akamai challenge flows (changed referer/origin chain,
+    caused 30s timeouts). The first load lets the site's challenge complete
+    normally; the reload then runs with hooks hot.
 
     Args:
         url: Target URL.
         wait_until: "load", "domcontentloaded", or "networkidle".
-        pre_inject_hooks: Optional list of hook preset names to inject BEFORE
-            navigation begins. Accepts any preset from inject_hook_preset
+        pre_inject_hooks: Optional list of hook preset names to register
+            before navigation. Accepts any preset from inject_hook_preset
             ("xhr", "fetch", "crypto", "websocket", "debugger_bypass") and
             also the special names:
                 - "jsvmp_probe"       - default jsvmp_hook.js probe
                 - "cookie_hook"       - document.cookie prototype hook
                 - "runtime_probe"     - full runtime_probe.js
-            This routes through about:blank first, evaluates all hooks there,
-            then navigates to the target URL - guaranteeing hooks are hot
-            when the target page's first <script> executes.
-        via_blank: If True, always go via about:blank first (even without
-            pre_inject_hooks). Useful to ensure persistent scripts from
-            previous sessions are applied.
+            Hooks are registered at context level, then the page is navigated
+            and automatically reloaded so hooks are active from the start.
         collect_response_chain: If True (default), record every response
             during this navigation so final_status reflects JS-driven
             redirects (Rui Shu 412 -> 200 after cookie challenge).
@@ -118,11 +115,10 @@ async def navigate(
             title: Page title
             initial_status: First HTTP response status (what page.goto saw)
             final_status: Last response status on the main frame
-                          (None if no main frame response observed)
             redirect_chain: List of {url, status, ts} for every response
-                            (only populated if collect_response_chain=True)
             hooks_injected: List of hook names actually injected
-            warnings: Non-fatal issues (failed hook injection, etc.)
+            reloaded: Whether an auto-reload was performed (True when hooks used)
+            warnings: Non-fatal issues
     """
     try:
         page = await browser_manager.get_active_page()
@@ -133,34 +129,38 @@ async def navigate(
         if collect_response_chain:
             browser_manager.reset_nav_responses()
 
-        # Pre-inject via about:blank
-        needs_blank = bool(pre_inject_hooks) or via_blank
-        if needs_blank:
-            try:
-                await page.goto("about:blank", wait_until="domcontentloaded")
-            except Exception as e:
-                warnings.append(f"about:blank navigation failed: {e}")
+        # Step 1: Register persistent hooks (context-level, no evaluate)
+        if pre_inject_hooks:
+            for name in pre_inject_hooks:
+                ok, msg = await _inject_hook_by_name(name)
+                if ok:
+                    hooks_injected.append(name)
+                else:
+                    warnings.append(f"hook '{name}' failed: {msg}")
 
-            if pre_inject_hooks:
-                for name in pre_inject_hooks:
-                    ok, msg = await _inject_hook_by_name(name)
-                    if ok:
-                        hooks_injected.append(name)
-                        if msg != "ok":
-                            warnings.append(f"pre-inject '{name}': {msg}")
-                    else:
-                        warnings.append(f"pre-inject '{name}' failed: {msg}")
-
-        # Main navigation
+        # Step 2: Navigate normally to the target URL
         resp = await page.goto(url, wait_until=wait_until)
         initial_status = resp.status if resp else None
 
-        # Find final status on main frame
+        # Step 3: If hooks were registered, reload so they fire before page JS
+        reloaded = False
+        if hooks_injected:
+            try:
+                if collect_response_chain:
+                    browser_manager.reset_nav_responses()
+                resp2 = await page.reload(wait_until=wait_until)
+                reloaded = True
+                # Update initial_status to the reload's status
+                if resp2:
+                    initial_status = resp2.status
+            except Exception as e:
+                warnings.append(f"auto-reload failed: {e}")
+
+        # Resolve final status from response chain
         final_status = None
         chain = []
         if collect_response_chain:
             chain = list(browser_manager._nav_responses)
-            # Main-frame candidates: url matches current page.url or was document
             for r in reversed(chain):
                 if r["url"] == page.url or r.get("resource_type") == "document":
                     final_status = r["status"]
@@ -173,6 +173,7 @@ async def navigate(
             "final_status": final_status if final_status is not None else initial_status,
             "redirect_chain": chain if collect_response_chain else None,
             "hooks_injected": hooks_injected,
+            "reloaded": reloaded,
             "warnings": warnings if warnings else None,
         }
     except Exception as e:
@@ -180,16 +181,13 @@ async def navigate(
 
 
 async def _inject_hook_by_name(name: str) -> tuple[bool, str]:
-    """Dispatch pre-inject hooks by symbolic name. Returns (ok, msg).
+    """Register a hook as a persistent context-level script. Returns (ok, msg).
 
-    Two-step flow:
-      1. Register the script at context level (add_init_script). This is the
-         load-bearing step — it guarantees the hook runs on the NEXT real
-         page.goto(url) before any target-site JS executes.
-      2. Best-effort evaluate on the current about:blank page so the hook is
-         also live there. Wrapped in JS try/catch AND an asyncio timeout:
-         some hooks (jsvmp Proxy install, cookie descriptor walk) can wedge
-         on opaque blank pages, and we must not let that block navigation.
+    Only registers the script via add_persistent_script (context-level
+    add_init_script). Does NOT evaluate on the current page — the caller
+    is responsible for reload/navigation to activate the hooks. This avoids
+    all the about:blank evaluate issues (opaque origin hangs, Proxy wedges,
+    cookie descriptor walks on blank pages).
     """
     hooks_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "hooks")
 
@@ -231,38 +229,17 @@ async def _inject_hook_by_name(name: str) -> tuple[bool, str]:
     except Exception as e:
         return False, f"prepare failed: {e}"
 
-    # Step B: register at context level (must succeed)
+    # Step B: register at context level with timeout
     try:
         await asyncio.wait_for(
             browser_manager.add_persistent_script(persist_name, js),
             timeout=_PRE_INJECT_REGISTER_TIMEOUT,
         )
-    except asyncio.TimeoutError:
-        return False, "add_persistent_script timed out"
-    except Exception as e:
-        return False, f"add_persistent_script failed: {e}"
-
-    # Step C: best-effort evaluate on current (about:blank) page. Wrap in
-    # JS try/catch so a failing hook body does not leave the page in a
-    # half-installed state, and wrap in asyncio.wait_for so a wedged
-    # evaluate cannot block the whole navigate call.
-    try:
-        page = await browser_manager.get_active_page()
-    except Exception as e:
-        return True, f"registered (no active page for eval: {e})"
-
-    wrapped = (
-        "(function(){try{" + js + "}catch(e){"
-        "try{console.warn('[pre_inject:" + name + "] '+e.message);}catch(_){}}"
-        "})()"
-    )
-    try:
-        await asyncio.wait_for(page.evaluate(wrapped), timeout=_PRE_INJECT_EVAL_TIMEOUT)
         return True, "ok"
     except asyncio.TimeoutError:
-        return True, "registered (blank-page eval timed out; will fire on goto)"
+        return False, "add_persistent_script timed out (10s)"
     except Exception as e:
-        return True, f"registered (blank-page eval error: {e})"
+        return False, f"add_persistent_script failed: {e}"
 
 
 @mcp.tool()
