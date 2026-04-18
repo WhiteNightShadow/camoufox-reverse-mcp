@@ -89,7 +89,7 @@ async def navigate(
          second load
 
     This "navigate-then-reload" approach avoids the about:blank detour that
-    broke signature-based anti-bot challenge flows (changed referer/origin
+    broke RS/AK-style signature-based anti-bot challenge flows (changed referer/origin
     chain, caused 30s timeouts). The first load lets the site's challenge
     complete normally; the reload then runs with hooks hot.
 
@@ -113,7 +113,7 @@ async def navigate(
 
             WARNING: pre-injected probes modify the runtime environment
             (Proxy on navigator/screen, Function.prototype.apply/call
-            overrides). For signature-based anti-bot systems where the
+            overrides). For RS/AK-style signature-based anti-bot systems where the
             environment fingerprint feeds into a hash, this WILL cause
             the challenge to fail. Symptoms: navigate never completes,
             redirect_chain shows repeated 412 responses with no 200.
@@ -121,7 +121,7 @@ async def navigate(
             rewrites the JS source without touching the environment.
         collect_response_chain: If True (default), record every response
             during this navigation so final_status reflects JS-driven
-            redirects (signature-based anti-bot 412 -> 200 after cookie challenge).
+            redirects (RS-style 412 -> 200 after cookie challenge).
 
     Returns:
         dict with:

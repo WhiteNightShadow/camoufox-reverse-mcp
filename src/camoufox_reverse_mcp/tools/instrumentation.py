@@ -86,7 +86,7 @@ async def instrument_jsvmp_source(
 ) -> dict:
     """Intercept a JSVMP script and instrument its source at the HTTP layer.
 
-    ★ RECOMMENDED DEFAULT for signature-based anti-bot systems. Unlike
+    ★ RECOMMENDED DEFAULT for RS/AK-style signature-based anti-bot systems. Unlike
     runtime hooks, this tool rewrites the JS source before the browser
     executes it. The environment stays pristine — the VMP reads the real
     navigator, computes the real signature, and the server accepts it.

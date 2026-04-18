@@ -20,7 +20,7 @@
 - Camoufox 在 **C++ 层面** 修改指纹信息，非 JS 层 patch，从根源不可检测
 - Juggler 协议沙箱隔离使 Playwright **完全不可被页面 JS 检测到**
 - BrowserForge 按 **真实世界流量统计分布** 生成指纹，不是随机拼凑
-- 能在各类签名型反爬、行为验证、WAF 类反爬等强反爬站点上正常工作
+- 能在 RS、AK、JY、CF 等各类强反爬站点上正常工作
 - Hook 使用 `Object.defineProperty` **防覆盖保护**，页面脚本无法恢复原始方法
 
 ---
@@ -222,9 +222,9 @@ python -m camoufox_reverse_mcp \
 >
 > | 反爬类型 | 代表 | ✅ 推荐路径 | ❌ 禁用 |
 > |---|---|---|---|
-> | **签名型**（环境即签名） | 签名型反爬 5/6、sensor_data 类签名 v3+ | `instrument_jsvmp_source(mode="ast")` + `analyze_cookie_sources()` | `pre_inject_hooks`、`hook_jsvmp_interpreter(mode="proxy")` |
-> | **行为型**（参数签名） | 行为型反爬站点 JSVMP、行为验证 gt4 | `hook_jsvmp_interpreter(mode="proxy")` 全量开 | — |
-> | **纯混淆** | 常见混淆工具、自研 VMP 无反指纹 | 任意组合 | — |
+> | **签名型**（环境即签名） | RS 5/6、AK sensor_data v3+ 等 | `instrument_jsvmp_source(mode="ast")` + `analyze_cookie_sources()` | `pre_inject_hooks`、`hook_jsvmp_interpreter(mode="proxy")` |
+> | **行为型**（参数签名） | TK JSVMP、JY gt4 等 | `hook_jsvmp_interpreter(mode="proxy")` 全量开 | — |
+> | **纯混淆** | 常见 JS 混淆工具、自研 VMP 无反指纹 | 任意组合 | — |
 >
 > **识别方法**：先 `navigate()`（不加 pre_inject），看 `redirect_chain`。出现重复 412 或 302 循环 → 签名型，走源码插桩。
 | 工具 | 说明 |
@@ -238,7 +238,7 @@ python -m camoufox_reverse_mcp \
 ### JSVMP 源码级插桩（通用 VMP 利器）
 | 工具 | 说明 |
 |------|------|
-| `instrument_jsvmp_source` | **[新]** 在 JS 下载后、执行前改写源码，对每个 obj[key] / fn(args) 插入 tap，捕获字节码分发循环的每次外部交互。**通用方案**，对各类签名型反爬、sensor_data 类签名、JSVMP 保护脚本、常见混淆工具都有效 |
+| `instrument_jsvmp_source` | **[新]** 在 JS 下载后、执行前改写源码，对每个 obj[key] / fn(args) 插入 tap，捕获字节码分发循环的每次外部交互。**通用方案**，对 RS、AK、TK JSVMP、常见混淆工具都有效 |
 | `get_instrumentation_log` | **[新]** 获取源码级插桩日志，带 hot_keys / hot_methods / hot_functions 摘要 |
 | `get_instrumentation_status` | **[新]** 查看当前激活的源码级插桩 |
 | `stop_instrumentation` | **[新]** 停止一个或全部源码插桩 |
@@ -354,7 +354,7 @@ AI 操作链：
 9. get_page_content()                             ← 一键导出渲染后 HTML + 可见文本
 ```
 
-### 场景 6：通用 JSVMP 逆向（签名型反爬 / 自研 VMP）
+### 场景 6：通用 JSVMP 逆向（RS / AK / 自研 VMP）
 
 这是最推荐的 JSVMP 分析流程，不依赖 VMP 实现细节，对几乎所有类型有效。
 
@@ -434,7 +434,7 @@ AI 操作链：
 
 ### v0.5.0（2026-04-18）— 签名型反爬兼容改造
 
-> 解决 `pre_inject_hooks` 对签名型反爬不可用的架构性问题。新增 MCP 侧 AST 改写、transparent 观察模式、反爬类型决策表和实战 Playbook。
+> 解决 `pre_inject_hooks` 对 RS/AK 等签名型反爬不可用的架构性问题。新增 MCP 侧 AST 改写、transparent 观察模式、反爬类型决策表和实战 Playbook。
 
 **架构性改进**
 - **`instrument_jsvmp_source` 默认改为 MCP 侧 esprima AST 改写**：不再依赖页面内 CDN（挑战页加载不到），AST 失败自动回落 regex
@@ -474,7 +474,7 @@ AI 操作链：
 | `get_runtime_probe_log` | 获取 runtime_probe.js 捕获的广谱运行时事件 |
 
 **重大改进**
-- **hook_jsvmp_interpreter 重写**：多路径覆盖 apply/call/bind + Reflect.apply/get/set/construct + Proxy 属性追踪 + 计时/随机 API，对各类 VMP 有效
+- **hook_jsvmp_interpreter 重写**：多路径覆盖 apply/call/bind + Reflect.apply/get/set/construct + Proxy 属性追踪 + 计时/随机 API，对 RS、AK、TK 等各类 VMP 有效
 - **navigate 增强**：支持 `pre_inject_hooks` 在页面 JS 前装 hook、返回 `initial_status` + `final_status` + `redirect_chain`，解决 412 挑战页 status 歧义
 - **dump_jsvmp_strings 修复**：用手动括号匹配替代嵌套正则，不再死循环或漏匹配
 - **新增 cookie_hook.js**：原型链级 document.cookie hook，正确处理 Document.prototype 上的 descriptor

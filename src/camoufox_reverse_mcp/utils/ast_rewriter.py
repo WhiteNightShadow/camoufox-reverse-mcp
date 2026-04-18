@@ -3,7 +3,7 @@ ast_rewriter.py - MCP-side JS AST rewriter for source-level JSVMP instrumentatio
 
 Uses esprima-python (pure Python, ES2017 coverage). Unlike the v0.4.x page-side
 Acorn approach, this runs entirely in the MCP process so it works on pages
-that block external CDNs (signature-based anti-bot 412 challenges).
+that block external CDNs (RS/AK 412 challenges).
 
 Usage:
     from .ast_rewriter import ast_rewrite, INSTRUMENT_RUNTIME

@@ -20,7 +20,7 @@ An MCP (Model Context Protocol) server that gives AI coding assistants (Claude C
 - Camoufox modifies fingerprint information at the **C++ engine level**, not JS patches
 - Juggler protocol sandbox isolation makes Playwright **completely undetectable** by page JS
 - BrowserForge generates fingerprints based on **real-world traffic distribution**
-- Works on sites with strong bot detection: signature-based anti-bot, behavioral verification, WAF-based anti-bot, etc.
+- Works on sites with strong bot detection: RS, AK, JY, CF, etc.
 - Hooks use `Object.defineProperty` with **override protection**, page scripts cannot restore original methods
 
 ---
@@ -210,8 +210,8 @@ python -m camoufox_reverse_mcp \
 >
 > | Anti-Bot Type | Examples | ✅ Recommended | ❌ Do NOT Use |
 > |---|---|---|---|
-> | **Signature-based** (env = signature) | Signature-based anti-bot 5/6, sensor_data-style signature v3+ | `instrument_jsvmp_source(mode="ast")` + `analyze_cookie_sources()` | `pre_inject_hooks`, `hook_jsvmp_interpreter(mode="proxy")` |
-> | **Behavior-based** (param signature) | Behavior-based anti-bot sites JSVMP, behavioral verification gt4 | `hook_jsvmp_interpreter(mode="proxy")` full coverage | — |
+> | **Signature-based** (env = signature) | RS 5/6, AK sensor_data v3+, etc. | `instrument_jsvmp_source(mode="ast")` + `analyze_cookie_sources()` | `pre_inject_hooks`, `hook_jsvmp_interpreter(mode="proxy")` |
+> | **Behavior-based** (param signature) | TK JSVMP, JY gt4, etc. | `hook_jsvmp_interpreter(mode="proxy")` full coverage | — |
 > | **Pure obfuscation** | JS obfuscation tools, custom VMP without fingerprinting | Any combination | — |
 >
 > **How to identify**: `navigate()` without pre_inject, check `redirect_chain`. Repeated 412 or 302 loops → signature-based, use source instrumentation.
@@ -330,7 +330,7 @@ AI workflow:
 9. get_page_content()                             ← Export rendered HTML + visible text
 ```
 
-### Scenario 6: Universal JSVMP Reverse Engineering (Signature-Based Anti-Bot / Custom VMP)
+### Scenario 6: Universal JSVMP Reverse Engineering (RS / AK / Custom VMP)
 
 The recommended JSVMP analysis workflow — works on virtually all VMP types.
 
@@ -376,7 +376,7 @@ AI workflow:
 
 ### v0.5.0 (2026-04-18) — Signature-Based Anti-Bot Compatibility
 
-> Fix the architectural issue where `pre_inject_hooks` breaks signature-based anti-bot. Add MCP-side AST rewriting, transparent observation mode, anti-bot type decision table, and JSVMP Playbook.
+> Fix the architectural issue where `pre_inject_hooks` breaks RS/AK-style signature-based anti-bot. Add MCP-side AST rewriting, transparent observation mode, anti-bot type decision table, and JSVMP Playbook.
 
 **Architectural Improvements**
 - **`instrument_jsvmp_source` default changed to MCP-side esprima AST**: No CDN dependency, auto-fallback to regex on parse failure

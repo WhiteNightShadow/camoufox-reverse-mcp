@@ -12,8 +12,8 @@ r = await navigate("https://target.com/")
 
 看返回：
 
-- `r["redirect_chain"]` 有 **412** 或多次同 URL 响应 → 大概率**签名型**反爬
-- 跳到特定 `challenge.html` 或加载滑块图片 → **行为型**（行为验证/验证码）
+- `r["redirect_chain"]` 有 **412** 或多次同 URL 响应 → 大概率**签名型**（RS/AK 类）
+- 跳到特定 `challenge.html` 或加载滑块图片 → **行为型**（JY/验证码）
 - 直接返回 200 但 JS 很大且压缩严重 → **纯混淆**或无反爬
 - `r["initial_status"] != r["final_status"]` → 有 JS 驱动的跳转，进一步查
 
@@ -22,14 +22,14 @@ r = await navigate("https://target.com/")
 ```python
 scripts = await list_network_requests(resource_type="script")
 # 找大于 100KB 的 JS,通常就是 VMP
-# 签名型反爬的 VMP 文件名常见: vmp_target*.js / challenge_*.js
-# 签名型反爬: 混在 body 里的内联 script 或特定路径
-# 行为型反爬: vmp_target.es5.*.js
+# RS 类签名型反爬的 VMP 文件名常见: vmp_target*.js / challenge_*.js
+# AK 类签名型反爬: 混在 body 里的内联 script 或特定路径
+# TK 类行为型反爬: vmp_target.es5.*.js
 ```
 
 ---
 
-## 工作流 A：签名型反爬
+## 工作流 A：签名型反爬（RS / AK 类）
 
 **核心原则：绝不在挑战完成前动环境**。观察只能用源码插桩。
 
@@ -44,7 +44,7 @@ await navigate("https://target.com/")
 ### A.2 归因 cookie
 
 ```python
-# 不需要 cookie_hook,因为签名型反爬 cookie 基本都是 Set-Cookie 响应头
+# 不需要 cookie_hook,因为 RS 类签名型反爬 cookie 基本都是 Set-Cookie 响应头
 await analyze_cookie_sources()
 # 关注 sources=["http_set_cookie"] 的 cookie,它们的 http_responses[].url
 # 就是服务端签发 cookie 的端点
@@ -84,11 +84,11 @@ log = await get_instrumentation_log(tag_filter="vmp",
 - ❌ `pre_inject_hooks=["jsvmp_probe"]` — 签名会废
 - ❌ `hook_jsvmp_interpreter(mode="proxy")` — 同上
 - ❌ `trace_property_access(["navigator.*"])` — 内部也用 getter/Proxy 替换,会污染
-- ⚠️ `hook_jsvmp_interpreter(mode="transparent")` — 比 proxy 模式安全得多,但某些极严格的签名型反爬版本仍能感知 descriptor 的 getter 函数 identity 变化。只有在源码插桩失败时才退到这里
+- ⚠️ `hook_jsvmp_interpreter(mode="transparent")` — 比 proxy 模式安全得多,但某些极严格的 RS 版本仍能感知 descriptor 的 getter 函数 identity 变化。只有在源码插桩失败时才退到这里
 
 ---
 
-## 工作流 B：行为型反爬
+## 工作流 B：行为型反爬（TK / JY 类）
 
 核心原则：怎么方便怎么来，runtime hook 全量打开。
 
@@ -111,7 +111,7 @@ xhr = await get_trace_data("XMLHttpRequest.prototype.send")
 
 ### B.2 抓签名请求
 
-行为型反爬站点的 JSVMP 会在每次 XHR/Fetch 时往 header 里塞签名参数。用 `xhr` 或 `fetch` hook 抓下来就行。
+TK 类行为型反爬的 JSVMP 会在每次 XHR/Fetch 时往 header 里塞签名参数。用 `xhr` 或 `fetch` hook 抓下来就行。
 
 ---
 

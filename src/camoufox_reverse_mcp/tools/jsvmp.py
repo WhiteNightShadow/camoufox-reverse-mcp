@@ -25,7 +25,7 @@ async def hook_jsvmp_interpreter(
     objects (navigator, screen, etc.), and intercepts timing/random APIs.
 
     Works on:
-        - Behavior-based anti-bot sites (parameter-based signature)
+        - TK-style behavior-based anti-bot (parameter-based signature)
         - Common JS obfuscation tool style VMPs
         - Custom VMPs using Reflect.* or direct invocation
         - Any VMP that does NOT hash the environment into a cookie/signature
@@ -36,10 +36,10 @@ async def hook_jsvmp_interpreter(
     LIMITATIONS — READ BEFORE USING:
         This tool's default "proxy" mode installs Proxies on global objects
         and overrides Function.prototype.apply/call/bind. These modifications
-        are DETECTABLE by signature-based anti-bot systems. Symptoms:
-        repeated 412 in redirect_chain, challenge never passes.
+        are DETECTABLE by RS/AK-style signature-based anti-bot systems.
+        Symptoms: repeated 412 in redirect_chain, challenge never passes.
 
-        Recommended alternatives for signature-based anti-bot:
+        Recommended alternatives for RS/AK-style signature-based anti-bot:
           1. instrument_jsvmp_source(mode="ast") — rewrites JS source,
              leaves the environment untouched. Signature stays valid.
           2. hook_jsvmp_interpreter(mode="transparent") — uses prototype-
@@ -52,11 +52,11 @@ async def hook_jsvmp_interpreter(
         mode: Observation strategy:
             - "proxy"        (default) - full coverage using Proxy on globals
               + Function.prototype.apply/call override. DETECTABLE by
-              signature-based anti-bot. Use for behavior-based anti-bot
-              sites and common JS obfuscation tools.
+              DETECTABLE by RS/AK-style signature-based anti-bot.
+              Use for TK / JY / common JS obfuscation tools.
             - "transparent"  - prototype-getter replacement only. No Proxy,
               no Function.prototype changes. Lower coverage but dramatically
-              less detectable. Try this first for signature-based anti-bot.
+              less detectable. Try this first for RS/AK-style anti-bot.
         track_calls, track_props, track_reflect, proxy_objects:
             Only apply when mode="proxy". Ignored for "transparent".
         max_entries: Log buffer cap (default 10000).
@@ -152,7 +152,7 @@ async def hook_jsvmp_interpreter(
                     "timing_apis": track_calls,
                 },
                 "data_location": "window.__mcp_jsvmp_log",
-                "warning": "proxy mode is detectable by signature-based anti-bot. "
+                "warning": "proxy mode is detectable by RS/AK-style signature-based anti-bot. "
                            "If target uses signature-based anti-bot, use mode='transparent' "
                            "or instrument_jsvmp_source instead.",
             }
