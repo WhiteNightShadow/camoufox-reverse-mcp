@@ -199,6 +199,18 @@ class BrowserManager:
             "duration": None,
         }
         self._network_requests.append(entry)
+        # Auto-archive to session
+        try:
+            from .domain_session import get_store
+            store = get_store()
+            if store.active and store.active.active_run_id:
+                store.record("network_events", {
+                    "type": "request", "id": self._request_id_counter,
+                    "url": req.url, "method": req.method,
+                    "resource_type": req.resource_type,
+                })
+        except Exception:
+            pass
 
     def _on_response_async(self, resp) -> None:
         """Handle response events, optionally capturing body asynchronously."""
@@ -211,6 +223,18 @@ class BrowserManager:
                 entry["duration"] = int(time.time() * 1000) - entry["timestamp"]
                 if self._capture_body:
                     asyncio.ensure_future(self._fetch_response_body(resp, entry))
+                # Auto-archive response to session
+                try:
+                    from .domain_session import get_store
+                    store = get_store()
+                    if store.active and store.active.active_run_id:
+                        store.record("network_events", {
+                            "type": "response", "id": entry["id"],
+                            "status": resp.status,
+                            "body_size": entry.get("duration"),
+                        })
+                except Exception:
+                    pass
                 break
 
     async def _fetch_response_body(self, resp, entry: dict) -> None:
