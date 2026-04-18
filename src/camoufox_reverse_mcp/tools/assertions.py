@@ -200,3 +200,83 @@ async def remove_assertion(assertion_id: str) -> dict:
         return {"status": "removed", "id": assertion_id, "domain": store.active.domain}
     except Exception as e:
         return {"error": str(e)}
+
+
+@mcp.tool()
+async def reverify_all_assertions_on_domain(
+    stop_on_first_fail: bool = False,
+    skip_errors: bool = True,
+) -> dict:
+    """Batch-verify all active assertions on the current domain.
+
+    Primary tool for triage after site updates: call this to see which
+    previously-verified facts no longer hold. The failing assertions
+    define the scope of new analysis work.
+
+    Args:
+        stop_on_first_fail: Return as soon as one assertion fails.
+        skip_errors: If True, assertions that throw during evaluate are
+            counted separately from pass/fail.
+    """
+    try:
+        store = get_store()
+        if store.active is None:
+            return {"error": "no active domain"}
+
+        aids = list(store.active.active_assertions)
+        if not aids:
+            return {"domain": store.active.domain, "total": 0,
+                    "note": "no active assertions on this domain"}
+
+        passed_ids, failed_ids, errored_ids = [], [], []
+        details = []
+
+        for aid in aids:
+            try:
+                r = await verify_assertion(aid)
+            except Exception as e:
+                r = {"id": aid, "error": f"verify threw: {e}"}
+
+            details.append(r)
+            if r.get("error"):
+                errored_ids.append(aid)
+                if not skip_errors:
+                    failed_ids.append(aid)
+            elif r.get("passed"):
+                passed_ids.append(aid)
+            else:
+                failed_ids.append(aid)
+                if stop_on_first_fail:
+                    break
+
+        total = len(aids)
+        passed_pct = round(len(passed_ids) / total * 100, 1) if total else 0
+        failed_pct = round(len(failed_ids) / total * 100, 1) if total else 0
+
+        if failed_pct == 0 and not errored_ids:
+            interpretation = "all assertions still hold. No changes detected."
+        elif failed_pct < 20:
+            interpretation = (f"{len(failed_ids)}/{total} assertions failed. "
+                              "Minor update: fix just the failed assertions.")
+        elif failed_pct < 60:
+            interpretation = (f"{len(failed_ids)}/{total} assertions failed. "
+                              "Moderate change: inspect failed IDs.")
+        else:
+            interpretation = (f"{len(failed_ids)}/{total} assertions failed. "
+                              "Major change: consider a fresh analysis run.")
+        if errored_ids:
+            interpretation += (f" Note: {len(errored_ids)} assertions errored "
+                               "(page state issue?).")
+
+        return {
+            "domain": store.active.domain, "total": total,
+            "passed": len(passed_ids), "failed": len(failed_ids),
+            "errored": len(errored_ids),
+            "passed_ids": passed_ids, "failed_ids": failed_ids,
+            "errored_ids": errored_ids,
+            "triage": {"passed_pct": passed_pct, "failed_pct": failed_pct,
+                       "interpretation": interpretation},
+            "details": details,
+        }
+    except Exception as e:
+        return {"error": str(e)}
