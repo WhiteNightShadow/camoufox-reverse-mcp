@@ -152,3 +152,167 @@ async def import_session(archive_path: str, merge_strategy: str = "replace",
         return result
     except Exception as e:
         return {"error": str(e)}
+
+
+import json
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
+
+@mcp.tool()
+async def verify_against_session(
+    signer_code: str,
+    sample_filter: Optional[dict] = None,
+    max_samples: int = 10,
+    compare_params: Optional[list[str]] = None,
+    run_id: str = "all",
+) -> dict:
+    """Offline verify a signing function against historical request samples.
+
+    Replays N captured requests from the session archive through a
+    user-supplied signing function, then compares each computed parameter
+    to the historically observed value, character by character.
+
+    Args:
+        signer_code: JS evaluating to a function: (sample) => ({param: value}).
+        sample_filter: Filter which requests to use.
+            Keys: url_contains, method, has_params (list of param names).
+        max_samples: Max samples to test.
+        compare_params: Which params to compare. If None, auto-detect
+            signature-like params.
+        run_id: "all" | "current" | specific run_id.
+    """
+    try:
+        store = get_store()
+        if store.active is None:
+            return {"error": "no active domain"}
+
+        samples = _collect_samples(store, sample_filter or {},
+                                   max_samples, compare_params, run_id)
+        if not samples:
+            return {"error": "no matching samples in session",
+                    "filter_used": sample_filter}
+
+        page = await browser_manager.get_active_page()
+        try:
+            await page.evaluate(f"window.__mcp_signer_fn = {signer_code};")
+        except Exception as e:
+            return {"error": f"signer_code failed to evaluate: {e}"}
+
+        details = []
+        passed = failed = 0
+        first_divergence = None
+
+        for s in samples:
+            try:
+                computed = await page.evaluate(
+                    "(sample) => window.__mcp_signer_fn(sample)", s["input"])
+            except Exception as e:
+                details.append({"sample_seq": s["seq"], "passed": False,
+                                "error": f"signer threw: {e}"})
+                failed += 1
+                continue
+
+            diffs = _compare_params(s["expected"], computed, compare_params)
+            if not diffs:
+                passed += 1
+                details.append({"sample_seq": s["seq"], "passed": True})
+            else:
+                failed += 1
+                details.append({"sample_seq": s["seq"], "passed": False, "diffs": diffs})
+                if first_divergence is None:
+                    first_divergence = {"sample_seq": s["seq"], "diffs": diffs,
+                                        "input": s["input"]}
+
+        return {
+            "total_samples": len(samples), "passed": passed, "failed": failed,
+            "pass_rate": round(passed / len(samples), 3) if samples else 0,
+            "first_divergence": first_divergence, "run_filter": run_id,
+            "details": details,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _collect_samples(store, filt: dict, max_n: int,
+                     target_params: Optional[list[str]],
+                     run_filter: str) -> list[dict]:
+    info = store.active
+    path = info.path / "network_events.jsonl"
+    if not path.exists():
+        return []
+
+    url_substr = filt.get("url_contains")
+    method = filt.get("method")
+    has_params = filt.get("has_params") or []
+
+    samples = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if rec.get("type") != "request":
+                continue
+            if run_filter == "current" and rec.get("run") != info.active_run_id:
+                continue
+            elif run_filter not in ("all", "current") and rec.get("run") != run_filter:
+                continue
+            url = rec.get("url", "")
+            if url_substr and url_substr not in url:
+                continue
+            if method and rec.get("method") != method:
+                continue
+            qs = parse_qs(urlparse(url).query)
+            qs_flat = {k: v[0] if v else "" for k, v in qs.items()}
+            if has_params and not all(p in qs_flat for p in has_params):
+                continue
+
+            expected = {}
+            if target_params:
+                for p in target_params:
+                    if p in qs_flat:
+                        expected[p] = qs_flat[p]
+            else:
+                sig_keywords = ("sign", "token", "msg", "bogus", "gnarly")
+                for k, v in qs_flat.items():
+                    if k[:1].isupper() or any(sk in k.lower() for sk in sig_keywords):
+                        expected[k] = v
+            if not expected:
+                continue
+
+            input_qs = {k: v for k, v in qs_flat.items() if k not in expected}
+            parsed = urlparse(url)
+            stripped_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path,
+                                      parsed.params, urlencode(input_qs), parsed.fragment))
+            samples.append({"seq": rec.get("seq"), "run": rec.get("run"),
+                            "input": {"url": stripped_url, "full_url": url,
+                                      "method": rec.get("method"), "params": input_qs},
+                            "expected": expected})
+            if len(samples) >= max_n:
+                break
+    return samples
+
+
+def _compare_params(expected: dict, computed: dict,
+                    focus: Optional[list[str]]) -> list[dict]:
+    diffs = []
+    keys = focus if focus else list(expected.keys())
+    for k in keys:
+        exp = expected.get(k)
+        act = (computed or {}).get(k)
+        if exp != act:
+            if isinstance(exp, str) and isinstance(act, str):
+                first_diff = -1
+                for i in range(min(len(exp), len(act))):
+                    if exp[i] != act[i]:
+                        first_diff = i
+                        break
+                if first_diff == -1 and len(exp) != len(act):
+                    first_diff = min(len(exp), len(act))
+                diffs.append({"param": k, "expected": exp, "actual": act,
+                              "first_diff_char": first_diff,
+                              "expected_length": len(exp), "actual_length": len(act)})
+            else:
+                diffs.append({"param": k, "expected": exp, "actual": act})
+    return diffs
