@@ -32,7 +32,8 @@ An MCP (Model Context Protocol) server that gives AI coding assistants (Claude C
 Paste the following into your AI coding tool's chat (Cursor / Claude Code / Codex, etc.):
 
 ```
-Please configure camoufox-reverse-mcp and refer to this MCP for related operations: https://github.com/WhiteNightShadow/camoufox-reverse-mcp
+Please install this MCP tool: camoufox-reverse-mcp
+Project URL: https://github.com/WhiteNightShadow/camoufox-reverse-mcp
 ```
 
 The AI will automatically clone, install dependencies, and configure the MCP server.

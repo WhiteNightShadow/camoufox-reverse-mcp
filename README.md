@@ -32,7 +32,8 @@
 在你的 AI 编码工具（Cursor / Claude Code / Codex 等）的对话框中输入：
 
 ```
-请帮我配置camoufox-reverse-mcp并在后续触发相关操作的时候查阅该mcp：https://github.com/WhiteNightShadow/camoufox-reverse-mcp
+帮我安装下这个mcp工具：camoufox-reverse-mcp
+项目地址：https://github.com/WhiteNightShadow/camoufox-reverse-mcp
 ```
 
 AI 会自动完成克隆、安装依赖、配置 MCP Server 的全部流程。
