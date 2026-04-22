@@ -106,22 +106,16 @@ class BrowserManager:
 
         # Property trace support: inject CAMOU_CONFIG and sandbox env vars
         enable_trace = cfg.get("enable_trace", False)
-        trace_env = {}
         if enable_trace:
             from .property_trace import build_property_trace_config, ensure_dirs, cleanup_old_traces
+            import json as _json
+            import os as _os
             ensure_dirs()
             cleanup_old_traces(keep_days=7)
             trace_config = build_property_trace_config()
-            import json as _json
-            trace_env["CAMOU_CONFIG"] = _json.dumps({"propertyTrace": trace_config})
-            # macOS content process sandbox blocks file writes; disable for tracing
-            trace_env["MOZ_DISABLE_CONTENT_SANDBOX"] = "1"
-
-        # If trace env vars are set, pass them via env parameter
-        if trace_env:
-            import os as _os
-            env = {**_os.environ, **trace_env}
-            kwargs["env"] = env
+            # Set env vars directly on the process (Camoufox reads CAMOU_CONFIG at startup)
+            _os.environ["CAMOU_CONFIG"] = _json.dumps({"propertyTrace": trace_config})
+            _os.environ["MOZ_DISABLE_CONTENT_SANDBOX"] = "1"
 
         self._cm = AsyncCamoufox(**kwargs)
         self.browser = await self._cm.__aenter__()
