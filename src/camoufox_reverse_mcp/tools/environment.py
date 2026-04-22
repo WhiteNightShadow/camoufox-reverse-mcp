@@ -64,10 +64,38 @@ async def check_environment() -> dict:
 
     overall_ok = version_ok and all(d["ok"] for d in deps.values() if d.get("installed"))
 
+    # camoufox-reverse custom browser detection
+    from ..property_trace import CACHE_DIR, CONTROL_DIR, TRACES_DIR
+    custom_browser: dict[str, Any] = {"installed": False}
+    try:
+        # Check if trace control files exist (= custom browser running with trace)
+        ctrl_files = list(CONTROL_DIR.glob("control-*.cmd")) if CONTROL_DIR.exists() else []
+        trace_files = list(TRACES_DIR.glob("*.jsonl")) if TRACES_DIR.exists() else []
+        if ctrl_files:
+            custom_browser = {
+                "installed": True,
+                "trace_active": True,
+                "control_files": len(ctrl_files),
+                "trace_files": len(trace_files),
+                "cache_dir": str(CACHE_DIR),
+            }
+        else:
+            custom_browser = {
+                "installed": False,
+                "install_hint": (
+                    "Download camoufox-reverse from "
+                    "https://github.com/WhiteNightShadow/camoufox-reverse/releases "
+                    "and launch with enable_trace=True"
+                ),
+            }
+    except Exception:
+        pass
+
     return {
         "mcp": {"version": version, "version_ok": version_ok},
         "deps": deps,
         "browser": browser_state,
+        "camoufox_reverse": custom_browser,
         "overall_ok": overall_ok,
         "recommendations": recommendations,
     }

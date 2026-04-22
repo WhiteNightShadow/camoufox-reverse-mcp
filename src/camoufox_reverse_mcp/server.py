@@ -22,3 +22,4 @@ from .tools import jsvmp            # noqa: E402, F401  — hook_jsvmp_interpret
 from .tools import instrumentation  # noqa: E402, F401  — instrumentation(action=...)
 from .tools import environment      # noqa: E402, F401  — check_environment
 from .tools import verification     # noqa: E402, F401  — verify_signer_offline
+from .tools import trace            # noqa: E402, F401  — trace_property_access + list/query
