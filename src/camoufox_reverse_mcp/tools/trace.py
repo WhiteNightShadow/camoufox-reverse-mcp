@@ -72,7 +72,9 @@ async def trace_property_access(
     # Clean old traces
     cleanup_traces()
 
-    # Write "on" to all control files
+    # Force new session: off → on cycle
+    write_control_all("off")
+    await asyncio.sleep(0.5)
     write_control_all("on")
     await asyncio.sleep(0.3)
 
