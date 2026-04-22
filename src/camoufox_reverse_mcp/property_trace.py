@@ -108,11 +108,8 @@ def cleanup_old_traces(keep_days: int = 7) -> int:
 
 
 def cleanup_traces() -> None:
-    """Clean all trace and control files."""
+    """Clean trace files only (not control files)."""
     for f in TRACES_DIR.glob("*.jsonl"):
-        try: f.unlink()
-        except: pass
-    for f in CONTROL_DIR.glob("*.cmd"):
         try: f.unlink()
         except: pass
 

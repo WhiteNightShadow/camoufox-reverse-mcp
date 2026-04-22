@@ -69,7 +69,7 @@ async def trace_property_access(
             "install_guide": "https://github.com/WhiteNightShadow/camoufox-reverse/releases",
         }
 
-    # Clean old traces
+    # Clean old trace files (keep control files)
     cleanup_traces()
 
     # Force new session: off → on cycle
