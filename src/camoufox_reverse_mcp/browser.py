@@ -104,7 +104,7 @@ class BrowserManager:
         headless = cfg.get("headless", False)
         kwargs["headless"] = headless
 
-        # Property trace support: inject CAMOU_CONFIG and sandbox env vars
+        # Property trace support: merge propertyTrace into CAMOU_CONFIG before launch
         enable_trace = cfg.get("enable_trace", False)
         if enable_trace:
             from .property_trace import build_property_trace_config, ensure_dirs, cleanup_old_traces
@@ -113,12 +113,33 @@ class BrowserManager:
             ensure_dirs()
             cleanup_old_traces(keep_days=7)
             trace_config = build_property_trace_config()
-            # Set env vars directly on the process (Camoufox reads CAMOU_CONFIG at startup)
-            _os.environ["CAMOU_CONFIG"] = _json.dumps({"propertyTrace": trace_config})
             _os.environ["MOZ_DISABLE_CONTENT_SANDBOX"] = "1"
+            # Camoufox sets CAMOU_CONFIG_1 during launch_options().
+            # We monkey-patch launch_options to inject propertyTrace.
+            from camoufox import utils as _cfx_utils
+            _orig_launch_options = _cfx_utils.launch_options
+            def _patched_launch_options(**kw):
+                result = _orig_launch_options(**kw)
+                env = result.get("env", {})
+                for key in list(env.keys()):
+                    if key.startswith("CAMOU_CONFIG"):
+                        try:
+                            existing = _json.loads(env[key])
+                            existing["propertyTrace"] = trace_config
+                            env[key] = _json.dumps(existing)
+                            break
+                        except (ValueError, TypeError):
+                            pass
+                result["env"] = env
+                return result
+            _cfx_utils.launch_options = _patched_launch_options
 
         self._cm = AsyncCamoufox(**kwargs)
         self.browser = await self._cm.__aenter__()
+
+        # Restore original launch_options
+        if enable_trace:
+            _cfx_utils.launch_options = _orig_launch_options
 
         ctx = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
         self.contexts["default"] = ctx
