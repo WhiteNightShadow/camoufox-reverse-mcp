@@ -104,42 +104,46 @@ class BrowserManager:
         headless = cfg.get("headless", False)
         kwargs["headless"] = headless
 
-        # Property trace support: merge propertyTrace into CAMOU_CONFIG before launch
+        # Property trace support
         enable_trace = cfg.get("enable_trace", False)
+
         if enable_trace:
             from .property_trace import build_property_trace_config, ensure_dirs, cleanup_old_traces
             import json as _json
             import os as _os
+            from functools import partial
+            from camoufox.utils import launch_options as _cfx_launch_options
             ensure_dirs()
             cleanup_old_traces(keep_days=7)
             trace_config = build_property_trace_config()
-            _os.environ["MOZ_DISABLE_CONTENT_SANDBOX"] = "1"
-            # Camoufox sets CAMOU_CONFIG_1 during launch_options().
-            # We monkey-patch launch_options to inject propertyTrace.
-            from camoufox import utils as _cfx_utils
-            _orig_launch_options = _cfx_utils.launch_options
-            def _patched_launch_options(**kw):
-                result = _orig_launch_options(**kw)
-                env = result.get("env", {})
-                for key in list(env.keys()):
-                    if key.startswith("CAMOU_CONFIG"):
-                        try:
-                            existing = _json.loads(env[key])
-                            existing["propertyTrace"] = trace_config
-                            env[key] = _json.dumps(existing)
-                            break
-                        except (ValueError, TypeError):
-                            pass
-                result["env"] = env
-                return result
-            _cfx_utils.launch_options = _patched_launch_options
+
+            # Build from_options ourselves, then inject propertyTrace
+            from_options = _cfx_launch_options(headless=headless, **{
+                k: v for k, v in kwargs.items() if k != "headless"
+            })
+            env = from_options.get("env", {})
+            # Merge propertyTrace into CAMOU_CONFIG_*
+            merged = False
+            for key in sorted(env.keys()):
+                if key.startswith("CAMOU_CONFIG"):
+                    try:
+                        existing = _json.loads(env[key])
+                        existing["propertyTrace"] = trace_config
+                        env[key] = _json.dumps(existing)
+                        merged = True
+                        break
+                    except (ValueError, TypeError):
+                        pass
+            if not merged:
+                env["CAMOU_CONFIG"] = _json.dumps({"propertyTrace": trace_config})
+            env["MOZ_DISABLE_CONTENT_SANDBOX"] = "1"
+            from_options["env"] = env
+
+            # Pass pre-built from_options to skip launch_options() call
+            kwargs["from_options"] = from_options
 
         self._cm = AsyncCamoufox(**kwargs)
         self.browser = await self._cm.__aenter__()
-
-        # Restore original launch_options
-        if enable_trace:
-            _cfx_utils.launch_options = _orig_launch_options
 
         ctx = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
         self.contexts["default"] = ctx
