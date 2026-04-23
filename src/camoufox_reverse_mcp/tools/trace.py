@@ -45,6 +45,8 @@ async def trace_property_access(
 
     Args:
         duration: Trace duration in seconds (default 10).
+            Set to 0 to read existing trace data from browser startup
+            (useful when you want to capture navigate() events).
         mode: Aggregation view type:
             - "summary" (default): Property access frequency ranking.
               Best for deciding which properties to patch in env emulation.
@@ -69,21 +71,20 @@ async def trace_property_access(
             "install_guide": "https://github.com/WhiteNightShadow/camoufox-reverse/releases",
         }
 
-    # Clean old trace files (keep control files)
-    cleanup_traces()
-
-    # Force new session: off → on cycle
-    write_control_all("off")
-    await asyncio.sleep(0.5)
-    write_control_all("on")
-    await asyncio.sleep(0.3)
-
-    # Wait for trace duration
-    await asyncio.sleep(duration)
-
-    # Write "off" to all control files
-    write_control_all("off")
-    await asyncio.sleep(0.5)
+    if duration > 0:
+        # Active trace: off→on→wait→off cycle for a fresh window
+        cleanup_traces()
+        write_control_all("off")
+        await asyncio.sleep(0.5)
+        write_control_all("on")
+        await asyncio.sleep(0.3)
+        await asyncio.sleep(duration)
+        write_control_all("off")
+        await asyncio.sleep(0.5)
+    else:
+        # duration=0: read existing trace files from auto-start (includes navigate events)
+        write_control_all("off")
+        await asyncio.sleep(0.5)
 
     # Collect events from all process trace files
     events: list[dict] = []
