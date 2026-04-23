@@ -103,7 +103,7 @@ pip install -e .
 
 ---
 
-## 可用工具一览（32 个）
+## 可用工具一览（35 个）
 
 ### 浏览器控制
 | 工具 | 说明 |
@@ -173,8 +173,18 @@ pip install -e .
 | 工具 | 说明 |
 |------|------|
 | `verify_signer_offline` | 离线验证签名函数：传入样本列表，逐样本字符级对比，定位首偏差点 |
-| `check_environment` | 一站式自检：MCP 版本、依赖、浏览器状态 |
+| `check_environment` | 一站式自检：MCP 版本、依赖、浏览器状态、camoufox-reverse 定制版检测 |
 | `reset_browser_state` | 清理残留（hooks / capture / routes），不关浏览器 |
+
+### 引擎层属性追踪（v1.1.0 新增）
+
+> 需要 [camoufox-reverse](https://github.com/WhiteNightShadow/camoufox-reverse) 定制版浏览器。未安装时返回错误提示，不影响其他工具使用。
+
+| 工具 | 说明 |
+|------|------|
+| `trace_property_access` | C++ 引擎层 DOM 属性访问追踪（JSVMP 不可检测）。支持 summary/timeline/sequence/search 四种视图。`duration=0` 读取启动以来的全部事件，`duration>0` 开启新的追踪窗口 |
+| `list_trace_files` | 列出本地所有 trace 文件（用于事后分析） |
+| `query_trace_file` | 查询指定的历史 trace 文件，支持按对象/关键词过滤 |
 
 ---
 
@@ -226,6 +236,32 @@ pip install -e .
 
 > 👉 完整的反爬类型识别与工作流见 [docs/JSVMP_PLAYBOOK.md](docs/JSVMP_PLAYBOOK.md)
 
+### 场景 4：引擎层追踪 JSVMP 环境指纹（v1.1.0 新增）
+
+> 需要 [camoufox-reverse 定制版浏览器](https://github.com/WhiteNightShadow/camoufox-reverse/releases)
+
+```
+1. launch_browser(enable_trace=True)           ← 启动带 C++ 追踪的浏览器
+2. navigate("https://www.douyin.com/video/xxx") ← JSVMP 执行，事件自动记录
+3. trace_property_access(duration=0, mode="summary")  ← 读取全部追踪数据
+   → 返回 JSVMP 实际读取的 42 个 DOM 属性及访问频次
+   → 包括 navigator/screen/window/canvas/webgl/audio/plugins/cookie/performance
+
+# 按时间线查看属性访问节奏
+4. trace_property_access(duration=0, mode="timeline", bucket_ms=500)
+
+# 按对象过滤
+5. trace_property_access(duration=0, filter_object="webgl")
+
+# 搜索特定属性
+6. trace_property_access(duration=0, mode="search", search_query="cookie")
+```
+
+**与 compare_env 的区别**：
+- `trace_property_access`：追踪 JSVMP **实际读取**的属性（精准，C++ 层，不可检测）
+- `compare_env`：采集浏览器**所有**环境属性（全量，JS 层）
+- 路径 B 环境伪装时，用 trace 结果决定"补哪些属性"，避免补多了引入新泄露点
+
 ---
 
 ## 技术架构
@@ -235,14 +271,17 @@ pip install -e .
 │           AI 编码助手 (Cursor / Claude)          │
 │                    ↕ MCP (stdio)                 │
 ├─────────────────────────────────────────────────┤
-│           camoufox-reverse-mcp (32 tools)        │
+│           camoufox-reverse-mcp (35 tools)        │
 │  ┌──────────┬──────────┬──────────┬──────────┐  │
 │  │Navigation│ Script   │Debugging │ Hooking  │  │
 │  │          │ Analysis │          │          │  │
 │  ├──────────┼──────────┼──────────┼──────────┤  │
 │  │ Network  │ JSVMP    │  Cookie  │  Verify  │  │
 │  │ Capture  │ Analysis │ Storage  │  Signer  │  │
-│  └──────────┴──────────┴──────────┴──────────┘  │
+│  ├──────────┴──────────┴──────────┴──────────┤  │
+│  │ ★ PropertyTracer (trace_property_access)  │  │
+│  │   C++ 引擎层 DOM 属性追踪（JSVMP 不可检测）  │  │
+│  └───────────────────────────────────────────┘  │
 │                    ↕ Playwright API               │
 ├─────────────────────────────────────────────────┤
 │      Camoufox (反指纹 Firefox, Juggler 协议)      │
@@ -253,6 +292,22 @@ pip install -e .
 ---
 
 ## 更新记录
+
+### v1.1.0（2026-04-22）— 引擎层属性追踪
+
+> 新增 3 个工具，`launch_browser` 新增 `enable_trace` 参数。
+
+**新增工具**
+- `trace_property_access` — C++ 引擎层 DOM 属性访问追踪（JSVMP 不可检测），支持 summary/timeline/sequence/search 四种视图
+- `list_trace_files` — 列出本地 trace 文件
+- `query_trace_file` — 查询历史 trace 文件
+
+**变更**
+- `launch_browser` 新增 `enable_trace` 参数，启用后自动注入 `CAMOU_CONFIG` 和 `MOZ_DISABLE_CONTENT_SANDBOX`
+- `check_environment` 新增 `camoufox_reverse` 字段，检测定制版浏览器安装状态
+
+**依赖**
+- 需要 [camoufox-reverse](https://github.com/WhiteNightShadow/camoufox-reverse) 定制版浏览器（可选，不装不影响其他 32 个工具）
 
 ### v1.0.0（2026-04-18）— 工具精简 + 回归纯 JS 逆向工具集
 
