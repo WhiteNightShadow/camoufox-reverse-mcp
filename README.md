@@ -182,7 +182,7 @@ pip install -e .
 
 | 工具 | 说明 |
 |------|------|
-| `trace_property_access` | C++ 引擎层 DOM 属性访问追踪（JSVMP 不可检测）。支持 summary/timeline/sequence/search 四种视图。`duration=0` 读取启动以来的全部事件，`duration>0` 开启新的追踪窗口 |
+| `trace_property_access` | C++ 引擎层 DOM 属性访问追踪（JSVMP 不可检测）。支持 summary/timeline/sequence/search 四种视图。`duration=0` 读取启动以来的全部事件，`duration>0` 开启新的追踪窗口。`collect_values=True` 自动从浏览器读取所有属性的真实值（大值保存到文件） |
 | `list_trace_files` | 列出本地所有 trace 文件（用于事后分析） |
 | `query_trace_file` | 查询指定的历史 trace 文件，支持按对象/关键词过滤 |
 
@@ -243,9 +243,10 @@ pip install -e .
 ```
 1. launch_browser(enable_trace=True)           ← 启动带 C++ 追踪的浏览器
 2. navigate("https://www.douyin.com/video/xxx") ← JSVMP 执行，事件自动记录
-3. trace_property_access(duration=0, mode="summary")  ← 读取全部追踪数据
-   → 返回 JSVMP 实际读取的 42 个 DOM 属性及访问频次
-   → 包括 navigator/screen/window/canvas/webgl/audio/plugins/cookie/performance
+3. trace_property_access(duration=0, mode="summary", collect_values=True)
+   → 返回 JSVMP 实际读取的 42 个 DOM 属性、访问频次、以及真实值
+   → 小值内联返回，大值（Canvas/WebGL/Cookie 等）自动保存到
+     ~/.cache/camoufox-reverse/values/ 目录
 
 # 按时间线查看属性访问节奏
 4. trace_property_access(duration=0, mode="timeline", bucket_ms=500)
