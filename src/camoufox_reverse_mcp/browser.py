@@ -108,13 +108,20 @@ class BrowserManager:
         enable_trace = cfg.get("enable_trace", False)
 
         if enable_trace:
-            from .property_trace import build_property_trace_config, ensure_dirs, cleanup_old_traces
+            from .property_trace import build_property_trace_config, ensure_dirs, cleanup_old_traces, cleanup_traces, CACHE_DIR
             import json as _json
             import os as _os
             from functools import partial
             from camoufox.utils import launch_options as _cfx_launch_options
             ensure_dirs()
             cleanup_old_traces(keep_days=7)
+            # Clean traces and values from previous sessions
+            cleanup_traces()
+            values_dir = CACHE_DIR / "values"
+            if values_dir.exists():
+                for f in values_dir.glob("*"):
+                    try: f.unlink()
+                    except: pass
             trace_config = build_property_trace_config()
 
             # Build from_options ourselves, then inject propertyTrace
