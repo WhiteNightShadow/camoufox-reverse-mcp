@@ -23,3 +23,8 @@ from .tools import instrumentation  # noqa: E402, F401  — instrumentation(acti
 from .tools import environment      # noqa: E402, F401  — check_environment
 from .tools import verification     # noqa: E402, F401  — verify_signer_offline
 from .tools import trace            # noqa: E402, F401  — trace_property_access + list/query
+
+# Must run after every tool module above has registered its tools.
+from .schema_compat import normalize_tool_schemas  # noqa: E402
+
+normalize_tool_schemas(mcp)
