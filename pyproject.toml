@@ -5,7 +5,7 @@ description = "Anti-detection browser MCP server for JavaScript reverse engineer
 requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = [
-    "mcp>=1.0.0",
+    "mcp>=1.29,<2",
     "camoufox[geoip]>=0.4.0",
     "playwright>=1.40.0",
     "esprima>=4.0.1",

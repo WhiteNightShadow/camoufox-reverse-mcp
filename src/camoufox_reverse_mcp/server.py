@@ -1,7 +1,19 @@
 from mcp.server.fastmcp import FastMCP
 from .browser import BrowserManager
+from .schema_compat import normalize_tool_schemas
 
-mcp = FastMCP(
+
+class SchemaCompatibleFastMCP(FastMCP):
+    """FastMCP server that normalizes advertised schemas before every listing."""
+
+    async def list_tools(self):
+        # Re-run here so tools registered after module import receive the same
+        # compatibility treatment. The rewrite is intentionally idempotent.
+        normalize_tool_schemas(self)
+        return await super().list_tools()
+
+
+mcp = SchemaCompatibleFastMCP(
     "camoufox-reverse-mcp",
     instructions="Anti-detection browser MCP server for JavaScript reverse engineering. "
     "Uses Camoufox (C++ engine-level fingerprint spoofing) to bypass bot detection "
@@ -24,7 +36,6 @@ from .tools import environment      # noqa: E402, F401  — check_environment
 from .tools import verification     # noqa: E402, F401  — verify_signer_offline
 from .tools import trace            # noqa: E402, F401  — trace_property_access + list/query
 
-# Must run after every tool module above has registered its tools.
-from .schema_compat import normalize_tool_schemas  # noqa: E402
-
+# Normalize eagerly for code that inspects FastMCP's manager directly. The
+# list_tools override also covers tools registered later at runtime.
 normalize_tool_schemas(mcp)

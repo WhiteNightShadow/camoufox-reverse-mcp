@@ -46,6 +46,9 @@ cd camoufox-reverse-mcp
 pip install -e .
 ```
 
+> v1.1.0 将 MCP Python SDK 固定在兼容的 v1 系列，并自动规范化可选参数
+> schema，可兼容 Moonshot/Kimi 等要求每个工具参数都包含 `type` 的严格服务。
+
 ### 客户端配置
 
 <details>
@@ -294,9 +297,10 @@ pip install -e .
 
 ## 更新记录
 
-### v1.1.0（2026-04-22）— 引擎层属性追踪
+### v1.1.0（2026-07-29）— 引擎追踪、浏览器接管与 Schema 兼容
 
-> 新增 3 个工具，`launch_browser` 新增 `enable_trace` 参数。
+> 稳定版：新增引擎层属性追踪和已运行浏览器接管，并提升严格 JSON Schema
+> 服务及跨平台运行的兼容性。
 
 **新增工具**
 - `trace_property_access` — C++ 引擎层 DOM 属性访问追踪（JSVMP 不可检测），支持 summary/timeline/sequence/search 四种视图
@@ -305,9 +309,18 @@ pip install -e .
 
 **变更**
 - `launch_browser` 新增 `enable_trace` 参数，启用后自动注入 `CAMOU_CONFIG` 和 `MOZ_DISABLE_CONTENT_SANDBOX`
+- `launch_browser` 新增 `ws_endpoint`，可接管已运行的 Camoufox 浏览器
 - `check_environment` 新增 `camoufox_reverse` 字段，检测定制版浏览器安装状态
+- 自动规范化顶层可选参数 schema，兼容 Moonshot/Kimi 等严格校验服务（感谢 [@tuntun1337](https://github.com/tuntun1337) 的贡献）
+
+**稳定性修复**
+- 修复 Windows 环境下 Camoufox/Playwright 导入死锁
+- 修复 Playwright Firefox driver 的 `pageError` 崩溃
+- 修复插桩改写响应后因 `Content-Encoding` 导致的内容丢失
 
 **依赖**
+- MCP Python SDK 固定为 `mcp>=1.29,<2`；v2 迁移将在后续版本单独进行
+
 - 需要 [camoufox-reverse](https://github.com/WhiteNightShadow/camoufox-reverse) 定制版浏览器（可选，不装不影响其他 32 个工具）
 
 ### v1.0.0（2026-04-18）— 工具精简 + 回归纯 JS 逆向工具集

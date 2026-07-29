@@ -44,4 +44,4 @@ def test_new_tools_count():
 
 def test_version():
     from camoufox_reverse_mcp import __version__
-    assert __version__ == "1.0.1"
+    assert __version__ == "1.1.0"
