@@ -46,6 +46,10 @@ cd camoufox-reverse-mcp
 pip install -e .
 ```
 
+> v1.1.0 pins the MCP Python SDK to the compatible v1 line and automatically
+> normalizes optional-parameter schemas for strict providers such as
+> Moonshot/Kimi that require a literal `type` on every tool property.
+
 ### Client Configuration
 
 <details>
@@ -103,7 +107,7 @@ pip install -e .
 
 ---
 
-## Available Tools (32)
+## Available Tools (35)
 
 ### Browser Control
 | Tool | Description |
@@ -253,6 +257,22 @@ pip install -e .
 ---
 
 ## Changelog
+
+### v1.1.0 (2026-07-29) — Engine Tracing, Browser Attach, and Schema Compatibility
+
+> Stable release adding engine-level property tracing and attachment to an
+> already running Camoufox browser, with stronger cross-provider compatibility.
+
+**Added**
+- `trace_property_access`, `list_trace_files`, and `query_trace_file`
+- `launch_browser(ws_endpoint=...)` for attaching to a running browser
+
+**Compatibility and stability**
+- Normalize safe top-level optional parameter schemas for strict providers such as Moonshot/Kimi (contributed by [@tuntun1337](https://github.com/tuntun1337))
+- Pin the MCP Python SDK to `mcp>=1.29,<2`; v2 migration will be handled separately
+- Fix Windows Camoufox/Playwright import deadlock
+- Fix Playwright Firefox driver `pageError` crashes
+- Fix lost rewritten responses caused by stale `Content-Encoding`
 
 ### v1.0.0 (2026-04-18) — Streamline + Pure JS Reverse Toolkit
 
