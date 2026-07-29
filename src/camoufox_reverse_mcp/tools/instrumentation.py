@@ -146,6 +146,7 @@ def _get_status() -> dict:
                 "files_rewritten": info["stats"]["files_rewritten"],
                 "total_edits": info["stats"]["total_edits"],
                 "last_url": info["stats"]["last_url"],
+                "last_mode_used": info["stats"]["last_mode_used"],
                 "cached_urls": len(info["cache"]),
             }
             for pat, info in _active_routes.items()

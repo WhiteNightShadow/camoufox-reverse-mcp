@@ -297,6 +297,12 @@ pip install -e .
 
 ## 更新记录
 
+### v1.1.1（2026-07-29）— AST 链式调用插桩修复
+
+- 修复 `new X().m1().m2()`、`Array.prototype.slice.call(arguments)` 等嵌套调用因父子 AST 编辑区间重叠而生成损坏代码的问题
+- 仅在编辑区间重叠时保留外层插桩；普通成员访问和函数调用的现有改写行为保持不变
+- `instrumentation(action="status")` 新增 `last_mode_used`，可区分 AST、regex 回退和超大文件跳过路径
+
 ### v1.1.0（2026-07-29）— 引擎追踪、浏览器接管与 Schema 兼容
 
 > 稳定版：新增引擎层属性追踪和已运行浏览器接管，并提升严格 JSON Schema

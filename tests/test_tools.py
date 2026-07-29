@@ -77,3 +77,25 @@ def test_hook_files_exist():
     ]
     for f in expected_files:
         assert os.path.exists(os.path.join(hooks_dir, f)), f"Missing hook file: {f}"
+
+
+def test_instrumentation_status_reports_last_mode_used(monkeypatch):
+    from camoufox_reverse_mcp.tools import instrumentation
+
+    monkeypatch.setattr(instrumentation, "_active_routes", {
+        "**/vmp.js": {
+            "mode": "ast",
+            "tag": "vmp",
+            "cache": {},
+            "stats": {
+                "files_rewritten": 1,
+                "total_edits": 2,
+                "last_url": "https://example.test/vmp.js",
+                "last_mode_used": "ast",
+            },
+        },
+    })
+
+    status = instrumentation._get_status()
+
+    assert status["active_patterns"][0]["last_mode_used"] == "ast"

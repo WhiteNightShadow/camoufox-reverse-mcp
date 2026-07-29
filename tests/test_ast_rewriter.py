@@ -62,3 +62,21 @@ def test_max_edits_cap():
     out, stats = ast_rewrite(src, tag="test", max_edits=5)
     assert out is not None
     assert stats["edits"] == 5
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "var result = new X().m1().m2();",
+        "var args = Array.prototype.slice.call(arguments);",
+    ],
+)
+def test_nested_method_chain_rewrite_remains_parseable(src):
+    import esprima
+
+    out, stats = ast_rewrite(src, tag="test")
+
+    assert out is not None
+    esprima.parseScript(out)
+    assert stats["overlap_skipped"] >= 1
+    assert stats["edits"] >= 1

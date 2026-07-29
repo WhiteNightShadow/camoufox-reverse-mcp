@@ -75,7 +75,8 @@ def ast_rewrite(
 
     stats: dict[str, Any] = {
         "parsed": False, "edits": 0,
-        "member_edits": 0, "call_edits": 0, "method_edits": 0, "skipped": 0,
+        "member_edits": 0, "call_edits": 0, "method_edits": 0,
+        "skipped": 0, "overlap_skipped": 0,
     }
 
     try:
@@ -224,6 +225,23 @@ def ast_rewrite(
                 stats["skipped"] += 1
 
     _walk(tree, None, on_node)
+
+    # Parent and child AST nodes can produce overlapping source ranges. Applying
+    # both replacements by their original offsets corrupts chained expressions.
+    # Keep the outer edit; its replacement still evaluates the original inner
+    # expression, while avoiding any behavior change for non-overlapping edits.
+    edits.sort(key=lambda e: (e["start"], -e["end"]))
+    non_overlapping: list[dict] = []
+    for edit in edits:
+        if non_overlapping and edit["end"] <= non_overlapping[-1]["end"]:
+            stats["overlap_skipped"] += 1
+            continue
+        non_overlapping.append(edit)
+    edits = non_overlapping
+
+    stats["member_edits"] = sum(e["kind"] == "member" for e in edits)
+    stats["call_edits"] = sum(e["kind"] == "call" for e in edits)
+    stats["method_edits"] = sum(e["kind"] == "method" for e in edits)
 
     edits.sort(key=lambda e: -e["start"])
     out = src

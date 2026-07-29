@@ -258,6 +258,12 @@ pip install -e .
 
 ## Changelog
 
+### v1.1.1 (2026-07-29) — AST Instrumentation Fix for Chained Calls
+
+- Fix corrupted output caused by overlapping parent/child AST edit ranges in expressions such as `new X().m1().m2()` and `Array.prototype.slice.call(arguments)`
+- Keep the outer instrumentation only when edit ranges overlap; existing behavior for ordinary member access and calls remains unchanged
+- Expose `last_mode_used` from `instrumentation(action="status")` to distinguish AST, regex fallback, and oversized-file paths
+
 ### v1.1.0 (2026-07-29) — Engine Tracing, Browser Attach, and Schema Compatibility
 
 > Stable release adding engine-level property tracing and attachment to an
