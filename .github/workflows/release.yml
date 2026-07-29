@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml)
+          tag="v${version}"
+          if ! git rev-parse --verify "refs/tags/${tag}^{commit}" >/dev/null 2>&1; then
+            echo "No ${tag} tag exists; skipping release."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release ${tag} already exists; skipping."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          title=$(git tag -l "$tag" --format='%(contents:subject)')
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "title=${title:-$tag}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/setup-python@v6
+        if: steps.release.outputs.publish == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Build release artifacts
+        if: steps.release.outputs.publish == 'true'
+        run: |
+          git checkout --detach "${{ steps.release.outputs.tag }}"
+          python -m pip install build
+          python -m build
+      - name: Publish GitHub release
+        if: steps.release.outputs.publish == 'true'
+        run: >-
+          gh release create "${{ steps.release.outputs.tag }}"
+          dist/*
+          --verify-tag
+          --title "${{ steps.release.outputs.title }}"
+          --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
