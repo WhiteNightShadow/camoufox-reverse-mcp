@@ -112,3 +112,12 @@ def test_registered_tool_properties_have_type():
         props = tool.inputSchema.get("properties") or {}
         for name, prop in props.items():
             assert "type" in prop, f"{tool.name}.{name} has no type"
+
+
+def test_instrumentation_advertises_opt_in_source_sites():
+    tool = next(tool for tool in asyncio.run(mcp.list_tools())
+                if tool.name == "instrumentation")
+    source_site = tool.inputSchema["properties"]["include_source_site"]
+
+    assert source_site["type"] == "boolean"
+    assert source_site["default"] is False

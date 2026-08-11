@@ -22,6 +22,9 @@ from ..utils.ast_rewriter import ast_rewrite as _ast_rewrite_py
 
 # Module-level state for active instrumentation routes
 _active_routes: dict[str, dict] = {}
+# Content-addressed source sites outlive a route so callers can stop rewriting
+# before reading the final page log. Entries are resolved on demand by site_id.
+_source_site_registry: dict[str, dict] = {}
 
 
 # Headers that must be stripped before route.fulfill() — Playwright's
@@ -64,6 +67,7 @@ async def instrumentation(
     filter_object_names: list[str] | None = None,
     max_file_size: int = 200_000,
     on_oversized: str = "selective",
+    include_source_site: bool = False,
 ) -> dict:
     """JSVMP source-level instrumentation (v0.9.0 unified).
 
@@ -87,6 +91,9 @@ async def instrumentation(
         tag: For "install"/"log" — group identifier.
         rewrite_member_access: For "install" — tap obj[key] reads.
         rewrite_calls: For "install" — tap fn(args) calls.
+        include_source_site: For "install" — attach a stable site_id and
+            monotonic seq to tap events, plus an original-source range map in
+            the log response. Default False.
         max_rewrites: For "install" — hard cap on rewrites per file.
         fallback_on_error: For "install" — auto-fallback to regex if AST fails.
         ignore_csp: For "install" — skip CSP pre-flight check.
@@ -122,10 +129,21 @@ async def instrumentation(
         re-trigger page load with routes active.
     """
     if action == "install":
-        return await _install(url_pattern, mode, tag, rewrite_member_access,
-                              rewrite_calls, max_rewrites, fallback_on_error,
-                              ignore_csp, filter_property_names,
-                              filter_object_names, max_file_size, on_oversized)
+        return await _install(
+            url_pattern=url_pattern,
+            mode=mode,
+            tag=tag,
+            rewrite_member_access=rewrite_member_access,
+            rewrite_calls=rewrite_calls,
+            max_rewrites=max_rewrites,
+            fallback_on_error=fallback_on_error,
+            ignore_csp=ignore_csp,
+            filter_property_names=filter_property_names,
+            filter_object_names=filter_object_names,
+            max_file_size=max_file_size,
+            on_oversized=on_oversized,
+            include_source_site=include_source_site,
+        )
     elif action == "log":
         return await _get_log(tag_filter, type_filter, key_filter, limit, clear)
     elif action == "stop":
@@ -148,6 +166,8 @@ def _get_status() -> dict:
                 "last_url": info["stats"]["last_url"],
                 "last_mode_used": info["stats"]["last_mode_used"],
                 "cached_urls": len(info["cache"]),
+                "include_source_site": info.get("include_source_site", False),
+                "source_site_count": len(info.get("source_sites", {})),
             }
             for pat, info in _active_routes.items()
         ],
@@ -158,7 +178,8 @@ def _get_status() -> dict:
 async def _install(url_pattern, mode, tag, rewrite_member_access,
                    rewrite_calls, max_rewrites, fallback_on_error, ignore_csp,
                    filter_property_names, filter_object_names,
-                   max_file_size, on_oversized) -> dict:
+                   max_file_size, on_oversized,
+                   include_source_site=False) -> dict:
     try:
         if not url_pattern:
             return {"error": "url_pattern is required for action='install'"}
@@ -189,6 +210,7 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
             pass
 
         cache: dict[str, str] = {}
+        source_sites: dict[str, dict] = {}
         stats = {"files_rewritten": 0, "total_edits": 0, "last_url": None,
                  "last_mode_used": None}
 
@@ -217,6 +239,7 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
                 rewritten = src
                 edit_count = 0
                 mode_used = mode
+                rewrite_stats: dict = {}
 
                 # v1.0.1: large file handling
                 if file_size > max_file_size:
@@ -248,7 +271,9 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
                             max_edits=max_rewrites,
                             filter_property_names=list(prop_filter_set) if prop_filter_set else None,
                             filter_object_names=list(obj_filter_set) if obj_filter_set else None,
+                            include_source_site=include_source_site,
                         )
+                        rewrite_stats = ast_stats
                         if ast_out is not None:
                             rewritten = ast_out
                             edit_count = ast_stats.get("edits", 0)
@@ -259,7 +284,9 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
                                 src, tag=tag,
                                 rewrite_member_access=rewrite_member_access,
                                 max_rewrites=max_rewrites,
+                                include_source_site=include_source_site,
                             )
+                            rewrite_stats = rstats
                             rewritten = rw
                             edit_count = rstats.get("member_access_rewrites", 0)
                     # else "force" — fall through to normal rewrite
@@ -274,7 +301,9 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
                             max_edits=max_rewrites,
                             filter_property_names=list(prop_filter_set) if prop_filter_set else None,
                             filter_object_names=list(obj_filter_set) if obj_filter_set else None,
+                            include_source_site=include_source_site,
                         )
+                        rewrite_stats = ast_stats
                         if ast_out is not None:
                             rewritten = ast_out
                             edit_count = ast_stats.get("edits", 0)
@@ -284,7 +313,9 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
                                 src, tag=tag,
                                 rewrite_member_access=rewrite_member_access,
                                 max_rewrites=max_rewrites,
+                                include_source_site=include_source_site,
                             )
+                            rewrite_stats = rstats
                             rewritten = rw
                             edit_count = rstats.get("member_access_rewrites", 0)
                     elif mode == "regex":
@@ -292,9 +323,31 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
                             src, tag=tag,
                             rewrite_member_access=rewrite_member_access,
                             max_rewrites=max_rewrites,
+                            include_source_site=include_source_site,
                         )
+                        rewrite_stats = rstats
                         rewritten = rw
                         edit_count = rstats.get("member_access_rewrites", 0)
+
+                if include_source_site:
+                    source_id = rewrite_stats.get("source_id")
+                    source_sha256 = rewrite_stats.get("source_sha256")
+                    for site in rewrite_stats.get("source_sites", []):
+                        metadata = {
+                            **site,
+                            "source_id": source_id,
+                            "source_sha256": source_sha256,
+                            "urls": [req_url],
+                            "offset_unit": "unicode_code_point",
+                            "range_semantics": "half_open",
+                        }
+                        existing = _source_site_registry.get(site["site_id"])
+                        if existing:
+                            metadata["urls"] = list(dict.fromkeys(
+                                [*existing.get("urls", []), req_url]
+                            ))
+                        source_sites[site["site_id"]] = metadata
+                        _source_site_registry[site["site_id"]] = metadata
 
                 cache[req_url] = rewritten
                 stats["files_rewritten"] += 1
@@ -316,12 +369,15 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
         _active_routes[url_pattern] = {
             "handler": route_handler, "cache": cache, "stats": stats,
             "mode": mode, "tag": tag, "context": ctx,
+            "include_source_site": include_source_site,
+            "source_sites": source_sites,
         }
         result = {
             "status": "instrumenting", "pattern": url_pattern,
             "mode": mode, "tag": tag,
             "route_level": "context",
             "selective": bool(prop_filter_set or obj_filter_set),
+            "include_source_site": include_source_site,
             "filter_property_names": filter_property_names,
             "filter_object_names": filter_object_names,
             "note": "Route active. Navigate or reload to trigger rewrite.",
@@ -349,6 +405,8 @@ async def _get_log(tag_filter, type_filter, key_filter, limit, clear) -> dict:
 
         key_count: dict[str, int] = {}
         method_count: dict[str, int] = {}
+        function_count: dict[str, int] = {}
+        site_count: dict[str, int] = {}
         for e in data:
             if e.get("type") == "tap_get":
                 k = e.get("key", "?")
@@ -356,18 +414,51 @@ async def _get_log(tag_filter, type_filter, key_filter, limit, clear) -> dict:
             elif e.get("type") == "tap_method":
                 m = f"{e.get('objType', '?')}.{e.get('method', '?')}"
                 method_count[m] = method_count.get(m, 0) + 1
+            elif e.get("type") in ("tap_call", "tap_call_err"):
+                fn = e.get("name", "?")
+                function_count[fn] = function_count.get(fn, 0) + 1
+            site_id = e.get("site_id")
+            if site_id:
+                site_count[site_id] = site_count.get(site_id, 0) + 1
+
+        entries = data[-limit:] if len(data) > limit else data
+        returned_site_ids = {
+            e["site_id"] for e in entries if e.get("site_id")
+        }
+        hot_sites = dict(
+            sorted(site_count.items(), key=lambda x: -x[1])[:30]
+        )
+        wanted_site_ids = returned_site_ids | set(hot_sites)
+        source_site_map: dict[str, dict] = {}
+        if wanted_site_ids:
+            for site_id in wanted_site_ids:
+                site = _source_site_registry.get(site_id)
+                if site:
+                    source_site_map[site_id] = site
+            for info in _active_routes.values():
+                for site_id, site in info.get("source_sites", {}).items():
+                    if site_id in wanted_site_ids and site_id not in source_site_map:
+                        source_site_map[site_id] = site
+        unresolved_site_ids = sorted(wanted_site_ids - set(source_site_map))
 
         if clear:
             await page.evaluate("window.__mcp_vmp_log = []")
-        return {
-            "entries": data[-limit:] if len(data) > limit else data,
+        result = {
+            "entries": entries,
             "total_entries": len(data), "returned": min(len(data), limit),
             "truncated": len(data) > limit,
             "summary": {
                 "hot_keys": dict(sorted(key_count.items(), key=lambda x: -x[1])[:30]),
                 "hot_methods": dict(sorted(method_count.items(), key=lambda x: -x[1])[:30]),
+                "hot_functions": dict(sorted(function_count.items(), key=lambda x: -x[1])[:30]),
             },
         }
+        if site_count:
+            result["summary"]["hot_sites"] = hot_sites
+            result["source_sites"] = source_site_map
+            if unresolved_site_ids:
+                result["unresolved_source_site_ids"] = unresolved_site_ids
+        return result
     except Exception as e:
         return {"error": str(e)}
 

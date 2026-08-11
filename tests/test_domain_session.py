@@ -1,4 +1,7 @@
 """Tests for v1.0.0: session module removed, verify clean removal."""
+import re
+from pathlib import Path
+
 import pytest
 
 
@@ -44,4 +47,9 @@ def test_new_tools_count():
 
 def test_version():
     from camoufox_reverse_mcp import __version__
-    assert __version__ == "1.1.2"
+    assert __version__ == "1.2.0"
+
+    pyproject = (Path(__file__).parents[1] / "pyproject.toml").read_text()
+    project_version = re.search(r'^version = "([^"]+)"$', pyproject, re.MULTILINE)
+    assert project_version is not None
+    assert project_version.group(1) == __version__

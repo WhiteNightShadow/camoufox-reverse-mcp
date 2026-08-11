@@ -9,6 +9,8 @@ js_rewriter.py - JS 源码插桩改写器。
 并通过 window.__mcp_vmp_log 输出。
 """
 from __future__ import annotations
+
+import hashlib
 import re
 from typing import Tuple
 
@@ -19,9 +21,14 @@ INSTRUMENT_RUNTIME = r"""
   window.__mcp_tap_installed = true;
   window.__mcp_vmp_log = window.__mcp_vmp_log || [];
   var CAP = 20000;
+  var siteSeq = 0;
   window.__mcp_tap_cfg = window.__mcp_tap_cfg || { sampling: 1, tagFilter: null };
-  function _push(e){
+  function _push(e, siteId){
     if (window.__mcp_vmp_log.length >= CAP) return;
+    if (typeof siteId === 'string' && siteId) {
+      e.site_id = siteId;
+      e.seq = siteSeq++;
+    }
     e.ts = Date.now();
     window.__mcp_vmp_log.push(e);
   }
@@ -44,31 +51,31 @@ INSTRUMENT_RUNTIME = r"""
       return s2.length > 120 ? s2.substr(0, 120) + '...' : s2;
     } catch (e) { return '[err]'; }
   }
-  window.__mcp_tap_get = function(obj, key, tag){
+  window.__mcp_tap_get = function(obj, key, tag, siteId){
     var val;
     try { val = obj[key]; } catch (e) { val = undefined; }
     if (_tag(tag) && Math.random() < window.__mcp_tap_cfg.sampling){
       _push({ type:'tap_get', tag: tag, key: String(key),
               objType: obj && obj.constructor ? obj.constructor.name : typeof obj,
-              value: _preview(val) });
+              value: _preview(val) }, siteId);
     }
     return val;
   };
-  window.__mcp_tap_call = function(fn, thisArg, args, tag){
+  window.__mcp_tap_call = function(fn, thisArg, args, tag, siteId){
     var r;
     try { r = fn.apply(thisArg, args); } catch (e) {
       if (_tag(tag)) _push({ type:'tap_call_err', tag: tag,
-                             name: fn && fn.name || 'anon', err: String(e) });
+                             name: fn && fn.name || 'anon', err: String(e) }, siteId);
       throw e;
     }
     if (_tag(tag) && Math.random() < window.__mcp_tap_cfg.sampling){
       _push({ type:'tap_call', tag: tag, name: fn && fn.name || 'anon',
               argc: args ? args.length : 0, arg0: args && args.length ? _preview(args[0]) : null,
-              ret: _preview(r) });
+              ret: _preview(r) }, siteId);
     }
     return r;
   };
-  window.__mcp_tap_method = function(obj, key, args, tag){
+  window.__mcp_tap_method = function(obj, key, args, tag, siteId){
     var fn = obj[key];
     if (typeof fn !== 'function') return undefined;
     var r = fn.apply(obj, args);
@@ -78,7 +85,7 @@ INSTRUMENT_RUNTIME = r"""
               method: String(key),
               argc: args ? args.length : 0,
               arg0: args && args.length ? _preview(args[0]) : null,
-              ret: _preview(r) });
+              ret: _preview(r) }, siteId);
     }
     return r;
   };
@@ -95,8 +102,31 @@ _MEMBER_BRACKET_RE = re.compile(
 )
 
 
-def _rewrite_member_access(src: str, tag: str, max_rewrites: int = 5000) -> Tuple[str, int]:
+def source_identity(src: str) -> tuple[str, str]:
+    """Return a compact content id and the full SHA-256 for decoded JS text."""
+    digest = hashlib.sha256(src.encode("utf-8")).hexdigest()
+    return digest[:16], digest
+
+
+def build_source_site(source_id: str, kind: str, start: int, end: int) -> dict:
+    """Build deterministic source-site metadata for one original text range."""
+    return {
+        "site_id": f"{source_id}:{start}:{end}:{kind}",
+        "kind": kind,
+        "start": start,
+        "end": end,
+    }
+
+
+def _rewrite_member_access(
+    src: str,
+    tag: str,
+    max_rewrites: int = 5000,
+    include_source_site: bool = False,
+    source_id: str = "",
+) -> Tuple[str, int, list[dict]]:
     count = 0
+    source_sites: list[dict] = []
 
     def repl(m: re.Match) -> str:
         nonlocal count
@@ -114,21 +144,44 @@ def _rewrite_member_access(src: str, tag: str, max_rewrites: int = 5000) -> Tupl
         if tail.lstrip().startswith('=') and not tail.lstrip().startswith('=='):
             return m.group(0)
         count += 1
-        return f"__mcp_tap_get({obj},{key},{repr(tag)})"
+        site_arg = ""
+        if include_source_site:
+            site = build_source_site(source_id, "tap_get", m.start(), m.end())
+            source_sites.append(site)
+            site_arg = f",{repr(site['site_id'])}"
+        return f"__mcp_tap_get({obj},{key},{repr(tag)}{site_arg})"
 
     new_src = _MEMBER_BRACKET_RE.sub(repl, src)
-    return new_src, count
+    return new_src, count, source_sites
 
 
 def regex_rewrite(src: str, tag: str = "vmp",
                   rewrite_member_access: bool = True,
-                  max_rewrites: int = 5000) -> Tuple[str, dict]:
+                  max_rewrites: int = 5000,
+                  include_source_site: bool = False) -> Tuple[str, dict]:
     """Rewrite source with regex-based taps. Returns (new_src, stats)."""
     stats = {"member_access_rewrites": 0}
     new_src = src
+    source_id = ""
+    source_sha256 = ""
+    source_sites: list[dict] = []
+    if include_source_site:
+        source_id, source_sha256 = source_identity(src)
     if rewrite_member_access:
-        new_src, n = _rewrite_member_access(new_src, tag, max_rewrites)
+        new_src, n, source_sites = _rewrite_member_access(
+            new_src,
+            tag,
+            max_rewrites,
+            include_source_site=include_source_site,
+            source_id=source_id,
+        )
         stats["member_access_rewrites"] = n
+    if include_source_site:
+        stats.update({
+            "source_id": source_id,
+            "source_sha256": source_sha256,
+            "source_sites": source_sites,
+        })
     return INSTRUMENT_RUNTIME + "\n" + new_src, stats
 
 

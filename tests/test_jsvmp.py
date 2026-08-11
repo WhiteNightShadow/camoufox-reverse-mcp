@@ -5,7 +5,10 @@ These tests verify the Python-side logic (template rendering, regex rewriting,
 cookie parsing, tool registration) without requiring a real browser.
 For real-site integration, use the scenarios in README.md manually.
 """
+import json
 import os
+import shutil
+import subprocess
 import pytest
 
 from camoufox_reverse_mcp.browser import BrowserManager
@@ -55,6 +58,79 @@ def test_regex_rewrite_max_cap():
     src = "; ".join(f"x{i}[y{i}]" for i in range(100))
     out, stats = regex_rewrite(src, tag="test", max_rewrites=5)
     assert stats["member_access_rewrites"] == 5
+
+
+def test_regex_source_site_uses_original_match_range():
+    src = 'var marker = "😀";\nvar ua = navigator["userAgent"];'
+    out, stats = regex_rewrite(src, tag="sites", include_source_site=True)
+
+    expected = 'navigator["userAgent"]'
+    site = stats["source_sites"][0]
+    assert site["start"] == src.index(expected)
+    assert site["end"] == src.index(expected) + len(expected)
+    assert site["kind"] == "tap_get"
+    assert site["site_id"] in out
+
+
+def test_default_regex_rewrite_has_no_source_site_metadata():
+    out, stats = regex_rewrite('navigator["userAgent"]', tag="default")
+
+    assert "source_sites" not in stats
+    assert "site_id" not in out.split("})();", 1)[-1]
+
+
+def test_ast_and_regex_sites_match_with_non_bmp_and_crlf_prefix():
+    from camoufox_reverse_mcp.utils.ast_rewriter import ast_rewrite
+
+    src = 'var marker="😀"; var ua=navigator["userAgent"];\r\n'
+    _, ast_stats = ast_rewrite(
+        src,
+        rewrite_calls=False,
+        include_source_site=True,
+    )
+    _, regex_stats = regex_rewrite(src, include_source_site=True)
+
+    assert (
+        ast_stats["source_sites"][0]["site_id"]
+        == regex_stats["source_sites"][0]["site_id"]
+    )
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
+def test_source_site_runtime_is_monotonic_and_default_log_is_compatible():
+    from camoufox_reverse_mcp.utils.ast_rewriter import ast_rewrite
+
+    src = "var target = {a: 1, b: 2}; target.a; target.b;"
+
+    def execute(include_source_site):
+        rewritten, _ = ast_rewrite(
+            src,
+            tag="runtime",
+            include_source_site=include_source_site,
+        )
+        assert rewritten is not None
+        script = (
+            "global.window=global;"
+            + rewritten
+            + ";process.stdout.write(JSON.stringify(window.__mcp_vmp_log));"
+        )
+        completed = subprocess.run(
+            [shutil.which("node"), "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads(completed.stdout)
+
+    default_events = execute(False)
+    site_events = execute(True)
+
+    assert len(default_events) == len(site_events) == 2
+    assert all("site_id" not in event and "seq" not in event for event in default_events)
+    assert all(set(event) == {"type", "tag", "key", "objType", "value", "ts"}
+               for event in default_events)
+    assert [event["seq"] for event in site_events] == [0, 1]
+    assert all(event["site_id"] for event in site_events)
 
 
 def test_instrument_runtime_is_valid_js():
@@ -266,4 +342,4 @@ async def test_pre_inject_jsvmp_probe_registers():
 
 def test_package_version():
     from camoufox_reverse_mcp import __version__
-    assert __version__ == "1.1.2"
+    assert __version__ == "1.2.0"

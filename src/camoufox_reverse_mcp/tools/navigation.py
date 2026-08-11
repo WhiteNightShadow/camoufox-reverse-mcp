@@ -96,7 +96,20 @@ async def launch_browser(
 async def close_browser() -> dict:
     """Close the Camoufox browser and release all resources."""
     try:
-        return await browser_manager.close()
+        from .instrumentation import (
+            _active_routes,
+            _source_site_registry,
+            _stop,
+        )
+
+        route_count = len(_active_routes)
+        site_count = len(_source_site_registry)
+        await _stop(None)
+        _source_site_registry.clear()
+        result = await browser_manager.close()
+        result["instrumentation_routes_cleared"] = route_count
+        result["source_sites_cleared"] = site_count
+        return result
     except Exception as e:
         return {"error": str(e)}
 
@@ -423,10 +436,17 @@ async def reset_browser_state(
             result["network_requests_cleared"] = count
         if clear_active_routes:
             try:
-                from .instrumentation import _active_routes, _stop
+                from .instrumentation import (
+                    _active_routes,
+                    _source_site_registry,
+                    _stop,
+                )
                 count = len(_active_routes)
+                site_count = len(_source_site_registry)
                 await _stop(None)
+                _source_site_registry.clear()
                 result["instrumentation_routes_cleared"] = count
+                result["source_sites_cleared"] = site_count
             except Exception as e:
                 result["instrumentation_clear_error"] = str(e)
         if clear_cookies:

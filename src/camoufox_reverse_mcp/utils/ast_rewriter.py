@@ -18,7 +18,11 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
-from .js_rewriter import INSTRUMENT_RUNTIME  # reuse the same runtime preamble
+from .js_rewriter import (  # reuse the same runtime preamble
+    INSTRUMENT_RUNTIME,
+    build_source_site,
+    source_identity,
+)
 
 
 # ============ AST walker ============
@@ -58,6 +62,7 @@ def ast_rewrite(
     max_edits: int = 20000,
     filter_property_names: list[str] | None = None,
     filter_object_names: list[str] | None = None,
+    include_source_site: bool = False,
 ) -> tuple[str | None, dict]:
     """Rewrite JS source via esprima-python AST walk.
 
@@ -66,6 +71,8 @@ def ast_rewrite(
             property name is in this list (e.g. ['userAgent', 'platform']).
         filter_object_names: If set, only rewrite member access where the
             base object identifier is in this list (e.g. ['navigator', 'screen']).
+        include_source_site: Add a stable source site id to each tap and return
+            a sidecar map based on the original decoded source ranges.
 
     Returns:
         (rewritten_source_with_runtime, stats) on success.
@@ -80,7 +87,10 @@ def ast_rewrite(
     }
 
     try:
-        tree = esprima.parseScript(src, options={"range": True, "tolerant": True})
+        parse_options = {"range": True, "tolerant": True}
+        if include_source_site:
+            parse_options["loc"] = True
+        tree = esprima.parseScript(src, options=parse_options)
         stats["parsed"] = True
     except Exception as e:
         stats["error"] = f"parse_failed: {type(e).__name__}: {e}"
@@ -90,6 +100,26 @@ def ast_rewrite(
     tag_lit = json.dumps(tag)
     prop_filter = set(filter_property_names) if filter_property_names else None
     obj_filter = set(filter_object_names) if filter_object_names else None
+    source_id = ""
+    source_sha256 = ""
+    if include_source_site:
+        source_id, source_sha256 = source_identity(src)
+
+    def site_for(node, kind: str, node_range: list[int]) -> dict | None:
+        if not include_source_site:
+            return None
+        site = build_source_site(source_id, kind, node_range[0], node_range[1])
+        loc = getattr(node, 'loc', None)
+        if loc is not None:
+            start = getattr(loc, 'start', None)
+            end = getattr(loc, 'end', None)
+            if start is not None:
+                site["line"] = getattr(start, 'line', None)
+                site["column"] = getattr(start, 'column', None)
+            if end is not None:
+                site["end_line"] = getattr(end, 'line', None)
+                site["end_column"] = getattr(end, 'column', None)
+        return site
 
     def emit_member_tap(node, parent):
         pt = getattr(parent, 'type', None) if parent else None
@@ -150,10 +180,13 @@ def ast_rewrite(
             if obj_filter and (obj_name is None or obj_name not in obj_filter):
                 return False
 
+        site = site_for(node, "tap_get", node_range)
+        site_arg = f", {json.dumps(site['site_id'])}" if site else ""
         edits.append({
             "start": node_range[0], "end": node_range[1],
-            "replacement": f"__mcp_tap_get({obj_src}, {key_src}, {tag_lit})",
+            "replacement": f"__mcp_tap_get({obj_src}, {key_src}, {tag_lit}{site_arg})",
             "kind": "member",
+            "source_site": site,
         })
         return True
 
@@ -188,20 +221,26 @@ def ast_rewrite(
                 if name is None:
                     return False
                 key_src = json.dumps(name)
+            site = site_for(node, "tap_method", node_range)
+            site_arg = f", {json.dumps(site['site_id'])}" if site else ""
             edits.append({
                 "start": node_range[0], "end": node_range[1],
-                "replacement": f"__mcp_tap_method({obj_src}, {key_src}, {args_src}, {tag_lit})",
+                "replacement": f"__mcp_tap_method({obj_src}, {key_src}, {args_src}, {tag_lit}{site_arg})",
                 "kind": "method",
+                "source_site": site,
             })
             return True
         elif ct == 'Identifier':
             fn_name = getattr(callee, 'name', None)
             if fn_name is None or fn_name in _SKIP_CALLEE_NAMES:
                 return False
+            site = site_for(node, "tap_call", node_range)
+            site_arg = f", {json.dumps(site['site_id'])}" if site else ""
             edits.append({
                 "start": node_range[0], "end": node_range[1],
-                "replacement": f"__mcp_tap_call({fn_name}, null, {args_src}, {tag_lit})",
+                "replacement": f"__mcp_tap_call({fn_name}, null, {args_src}, {tag_lit}{site_arg})",
                 "kind": "call",
+                "source_site": site,
             })
             return True
         return False
@@ -242,6 +281,14 @@ def ast_rewrite(
     stats["member_edits"] = sum(e["kind"] == "member" for e in edits)
     stats["call_edits"] = sum(e["kind"] == "call" for e in edits)
     stats["method_edits"] = sum(e["kind"] == "method" for e in edits)
+    if include_source_site:
+        stats.update({
+            "source_id": source_id,
+            "source_sha256": source_sha256,
+            "source_sites": [
+                e["source_site"] for e in edits if e.get("source_site")
+            ],
+        })
 
     edits.sort(key=lambda e: -e["start"])
     out = src

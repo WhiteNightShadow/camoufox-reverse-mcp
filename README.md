@@ -165,6 +165,13 @@ pip install -e .
 | `instrumentation(action)` | 源码级插桩：`install` 注册改写 / `log` 获取日志 / `stop` 停止 / `reload` 重载 / `status` 查看状态 |
 | `compare_env` | 浏览器环境指纹收集，用于与 Node.js/jsdom 对比 |
 
+需要对齐浏览器与沙箱中的同一执行点时，可在安装时设置
+`include_source_site=True`。事件会增加稳定 `site_id` 与单调 `seq`，`log`
+返回 `source_sites` sidecar，映射到拦截脚本的原始字符区间。该能力默认关闭；
+它表示混淆后 JS 的源码位置，不会猜测 VM 的 PC、opcode 或保护前源码位置。
+对超过 200KB 且需要全量改写的脚本，需显式设置 `on_oversized="force"`；
+否则应配合属性过滤并按需关闭 `rewrite_calls` 控制开销。
+
 ### Cookie 与存储
 | 工具 | 说明 |
 |------|------|
@@ -297,6 +304,14 @@ pip install -e .
 
 ## 更新记录
 
+### v1.2.0（2026-08-11）— 通用源码执行点映射
+
+- `instrumentation(action="install")` 新增默认关闭的 `include_source_site`
+- AST 与 regex 插桩事件可携带内容寻址的稳定 `site_id` 和单调 `seq`
+- `instrumentation(action="log")` 返回原始脚本 SHA-256、URL、字符区间与 AST 行列 sidecar，并补齐 `hot_functions`
+- 默认 tap 事件字段保持不变；不执行用户提供的任意 AST 脚本，也不把单个 VM 的变量名猜成通用 PC/opcode
+- 感谢 [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) 提出执行点关联需求并提供分析材料
+
 ### v1.1.2（2026-08-11）— Windows 引擎追踪配置修复
 
 - 修复 Windows 上 Camoufox 将配置拆为 `CAMOU_CONFIG_1..n` 后，`enable_trace=True` 无法注入 `propertyTrace`、持续返回 `engine_trace_not_available` 的问题
@@ -393,6 +408,12 @@ pip install -e .
 ### v0.1.0 — 初始版本（44 工具）
 
 ---
+
+## 社区贡献者
+
+- [@tuntun1337](https://github.com/tuntun1337) — 严格 JSON Schema 兼容性
+- [@Code-xy](https://github.com/Code-xy) — Windows 引擎追踪问题定位与验证
+- [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP 执行点关联需求与分析材料
 
 ## 反馈 / 交流
 

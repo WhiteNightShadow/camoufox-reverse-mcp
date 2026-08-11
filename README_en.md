@@ -166,6 +166,15 @@ pip install -e .
 | `instrumentation(action)` | Source-level instrumentation: `install` / `log` / `stop` / `reload` / `status` |
 | `compare_env` | Collect browser env fingerprint for Node.js/jsdom comparison |
 
+Set `include_source_site=True` when browser and sandbox traces need stable
+execution-site alignment. Events receive a content-addressed `site_id` and a
+monotonic `seq`; `log` returns a `source_sites` sidecar for the intercepted
+script's original character ranges. This is off by default. It does not guess a
+VM PC, opcode, or pre-protection source location.
+For scripts over 200KB that require a full rewrite, explicitly set
+`on_oversized="force"`; otherwise use property filters and disable
+`rewrite_calls` when call tracing is unnecessary.
+
 ### Cookies & Storage
 | Tool | Description |
 |------|-------------|
@@ -258,6 +267,14 @@ pip install -e .
 
 ## Changelog
 
+### v1.2.0 (2026-08-11) — Generic Source-Site Mapping
+
+- Add opt-in `include_source_site` to `instrumentation(action="install")`
+- Let AST and regex tap events carry a stable content-addressed `site_id` and monotonic `seq`
+- Return original script SHA-256, URL, character ranges, AST line/column sidecars, and `hot_functions` from `instrumentation(action="log")`
+- Keep default tap event fields unchanged; arbitrary user AST scripts and single-VM PC/opcode guessing are intentionally out of scope
+- Thanks to [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) for reporting the execution-site correlation gap and providing analysis materials
+
 ### v1.1.2 (2026-08-11) — Windows Engine Trace Configuration Fix
 
 - Fix `enable_trace=True` returning `engine_trace_not_available` on Windows when Camoufox splits its JSON across `CAMOU_CONFIG_1..n`
@@ -316,6 +333,12 @@ pip install -e .
 ### v0.1.0 — Initial Release (44 tools)
 
 ---
+
+## Community Contributors
+
+- [@tuntun1337](https://github.com/tuntun1337) — strict JSON Schema compatibility
+- [@Code-xy](https://github.com/Code-xy) — Windows engine-trace diagnosis and validation
+- [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP execution-site requirements and analysis materials
 
 ## Feedback / Contact
 
