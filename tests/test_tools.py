@@ -337,6 +337,53 @@ async def test_log_resolves_truncated_hot_sites_after_route_stop(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_stop_preserves_source_site_registry_for_final_log(monkeypatch):
+    from camoufox_reverse_mcp.tools import instrumentation
+
+    pattern = "**/vmp.js"
+    site_id = "cccccccccccccccc:5:12:tap_get"
+    site = {"site_id": site_id, "start": 5, "end": 12}
+
+    class FakeContext:
+        def __init__(self):
+            self.unrouted = []
+
+        async def unroute(self, route_pattern):
+            self.unrouted.append(route_pattern)
+
+    class FakePage:
+        async def evaluate(self, expression):
+            assert expression == "window.__mcp_vmp_log || []"
+            return [{"type": "tap_get", "key": "userAgent", "site_id": site_id}]
+
+    async def get_active_page():
+        return FakePage()
+
+    context = FakeContext()
+    monkeypatch.setattr(instrumentation, "_active_routes", {
+        pattern: {"context": context, "source_sites": {site_id: site}},
+    })
+    monkeypatch.setattr(instrumentation, "_source_site_registry", {site_id: site})
+    monkeypatch.setattr(
+        instrumentation.browser_manager,
+        "get_active_page",
+        get_active_page,
+    )
+
+    stopped = await instrumentation._stop(pattern)
+
+    assert stopped == {"status": "stopped", "removed": [pattern]}
+    assert context.unrouted == [pattern]
+    assert instrumentation._active_routes == {}
+    assert instrumentation._source_site_registry == {site_id: site}
+
+    result = await instrumentation._get_log(None, None, None, 500, False)
+
+    assert result["source_sites"] == {site_id: site}
+    assert "unresolved_source_site_ids" not in result
+
+
+@pytest.mark.asyncio
 async def test_reset_browser_state_clears_source_site_registry(monkeypatch):
     from camoufox_reverse_mcp.tools import instrumentation, navigation
 
