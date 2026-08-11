@@ -297,6 +297,14 @@ pip install -e .
 
 ## 更新记录
 
+### v1.1.2（2026-08-11）— Windows 引擎追踪配置修复
+
+- 修复 Windows 上 Camoufox 将配置拆为 `CAMOU_CONFIG_1..n` 后，`enable_trace=True` 无法注入 `propertyTrace`、持续返回 `engine_trace_not_available` 的问题
+- 完整重组原始 JSON 后再合并追踪配置，并按平台限制重新生成任意数量的连续分块；同时清理旧分块，保留全部原始指纹配置
+- 对数字顺序、十块以上配置、Unicode、分块扩缩容、无效配置及调用真实 `camoufox.utils.get_env_vars()` 模拟 Windows 分块增加回归测试
+- 针对本问题，已安装支持属性追踪的 `camoufox-reverse` 用户只需升级 MCP，无需重新编译或替换浏览器
+- 感谢 [@Code-xy](https://github.com/Code-xy) 报告问题、完成 Windows 实机定位并提供修复思路
+
 ### v1.1.1（2026-07-29）— AST 链式调用插桩修复
 
 - 修复 `new X().m1().m2()`、`Array.prototype.slice.call(arguments)` 等嵌套调用因父子 AST 编辑区间重叠而生成损坏代码的问题

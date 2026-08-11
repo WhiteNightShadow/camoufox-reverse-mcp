@@ -118,10 +118,14 @@ class BrowserManager:
         enable_trace = cfg.get("enable_trace", False)
 
         if enable_trace:
-            from .property_trace import build_property_trace_config, ensure_dirs, cleanup_old_traces, cleanup_traces, CACHE_DIR
-            import json as _json
-            import os as _os
-            from functools import partial
+            from .camou_config import merge_camou_config_env
+            from .property_trace import (
+                CACHE_DIR,
+                build_property_trace_config,
+                cleanup_old_traces,
+                cleanup_traces,
+                ensure_dirs,
+            )
             from camoufox.utils import launch_options as _cfx_launch_options
             ensure_dirs()
             cleanup_old_traces(keep_days=7)
@@ -138,21 +142,10 @@ class BrowserManager:
             from_options = _cfx_launch_options(headless=headless, **{
                 k: v for k, v in kwargs.items() if k != "headless"
             })
-            env = from_options.get("env", {})
-            # Merge propertyTrace into CAMOU_CONFIG_*
-            merged = False
-            for key in sorted(env.keys()):
-                if key.startswith("CAMOU_CONFIG"):
-                    try:
-                        existing = _json.loads(env[key])
-                        existing["propertyTrace"] = trace_config
-                        env[key] = _json.dumps(existing)
-                        merged = True
-                        break
-                    except (ValueError, TypeError):
-                        pass
-            if not merged:
-                env["CAMOU_CONFIG"] = _json.dumps({"propertyTrace": trace_config})
+            env = merge_camou_config_env(
+                from_options.get("env", {}),
+                {"propertyTrace": trace_config},
+            )
             env["MOZ_DISABLE_CONTENT_SANDBOX"] = "1"
             from_options["env"] = env
 

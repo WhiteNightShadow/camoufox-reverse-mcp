@@ -264,6 +264,6 @@ async def test_pre_inject_jsvmp_probe_registers():
 
 # ============ Version ============
 
-def test_version_is_040():
+def test_package_version():
     from camoufox_reverse_mcp import __version__
-    assert __version__ == "1.1.1"
+    assert __version__ == "1.1.2"

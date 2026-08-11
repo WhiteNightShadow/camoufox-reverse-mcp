@@ -258,6 +258,14 @@ pip install -e .
 
 ## Changelog
 
+### v1.1.2 (2026-08-11) — Windows Engine Trace Configuration Fix
+
+- Fix `enable_trace=True` returning `engine_trace_not_available` on Windows when Camoufox splits its JSON across `CAMOU_CONFIG_1..n`
+- Reassemble the complete JSON before merging `propertyTrace`, then rebuild any number of contiguous platform-sized chunks while preserving the original fingerprint configuration
+- Add regression coverage for numeric ordering, more than ten chunks, Unicode, chunk growth and shrinkage, invalid configs, and actual `camoufox.utils.get_env_vars()` output in simulated Windows mode
+- For this issue, users who already have a property-tracing `camoufox-reverse` build only need to upgrade the MCP; the browser does not need to be rebuilt or replaced
+- Thanks to [@Code-xy](https://github.com/Code-xy) for the report, Windows validation, root-cause analysis, and proposed direction
+
 ### v1.1.1 (2026-07-29) — AST Instrumentation Fix for Chained Calls
 
 - Fix corrupted output caused by overlapping parent/child AST edit ranges in expressions such as `new X().m1().m2()` and `Array.prototype.slice.call(arguments)`
