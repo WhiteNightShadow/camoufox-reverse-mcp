@@ -41,7 +41,7 @@ async def launch_browser(
         browser_version: Select one already-installed Camoufox 0.5+ browser
             without changing its persistent active version. Use a repo-qualified
             selector such as "official/beta.30" or
-            "whitenightshadow/152.0.4-beta.30-reverse.2". Omit it to preserve the
+            "whitenightshadow/152.0.4-beta.30-reverse.3". Omit it to preserve the
             active/default behavior, including Camoufox 0.4.x installations.
             The selected browser must match the active browser's exact
             version/build because Camoufox reads shared resources from active.

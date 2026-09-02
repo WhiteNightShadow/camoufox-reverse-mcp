@@ -195,7 +195,7 @@ builds side by side without changing the persistent active browser:
 ```text
 check_environment()
 launch_browser(
-  browser_version="whitenightshadow/152.0.4-beta.30-reverse.2",
+  browser_version="whitenightshadow/152.0.4-beta.30-reverse.3",
   enable_trace=True
 )
 ```
