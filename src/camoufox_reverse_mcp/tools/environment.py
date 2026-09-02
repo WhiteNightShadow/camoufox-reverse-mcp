@@ -62,7 +62,37 @@ async def check_environment() -> dict:
     except Exception as e:
         browser_state["error"] = str(e)
 
-    overall_ok = version_ok and all(d["ok"] for d in deps.values() if d.get("installed"))
+    # Camoufox Python/browser runtime discovery is strictly read-only. In
+    # particular, this does not call get_active_path(), which may auto-select
+    # and persist a browser in Camoufox 0.5.
+    try:
+        from ..camoufox_runtime import inspect_camoufox_runtime
+
+        camoufox_runtime = inspect_camoufox_runtime()
+        if camoufox_runtime.get("legacy_cache_migration_risk"):
+            recommendations.append(
+                "Camoufox 0.5 detected a legacy flat cache without its compatibility flag. "
+                "Back up or migrate it before running `camoufox fetch`; upstream may remove old data."
+            )
+        if camoufox_runtime.get("error"):
+            recommendations.append(
+                f"Camoufox runtime discovery failed: {camoufox_runtime['error']}"
+            )
+    except Exception as e:
+        camoufox_runtime = {
+            "python_version": "unknown",
+            "multiversion_supported": False,
+            "active": None,
+            "installed": [],
+            "error": str(e),
+        }
+
+    overall_ok = (
+        version_ok
+        and all(d["ok"] for d in deps.values())
+        and not camoufox_runtime.get("error")
+        and camoufox_runtime.get("active") is not None
+    )
 
     # camoufox-reverse custom browser detection
     from ..property_trace import CACHE_DIR, CONTROL_DIR, TRACES_DIR
@@ -95,6 +125,7 @@ async def check_environment() -> dict:
         "mcp": {"version": version, "version_ok": version_ok},
         "deps": deps,
         "browser": browser_state,
+        "camoufox": camoufox_runtime,
         "camoufox_reverse": custom_browser,
         "overall_ok": overall_ok,
         "recommendations": recommendations,

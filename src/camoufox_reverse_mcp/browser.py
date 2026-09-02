@@ -27,8 +27,10 @@ def detect_system_locale() -> str:
     """Best-effort detection of the host's locale (e.g. 'zh-CN')."""
     for var in ("LANG", "LC_ALL", "LC_MESSAGES"):
         val = _os.environ.get(var, "")
-        if val and val not in ("C", "POSIX"):
-            return val.split(".")[0].replace("_", "-")
+        if val:
+            locale = val.split(".", 1)[0]
+            if locale not in ("C", "POSIX"):
+                return locale.replace("_", "-")
     return "en-US"
 
 
@@ -56,6 +58,7 @@ class BrowserManager:
         self._persistent_traces: dict[str, list] = {}
         self._nav_responses: list[dict] = []  # 最近一次 navigate 记录到的响应链路
         self._route_handlers: dict[str, Any] = {}  # 已注册的 route handler 映射
+        self._runtime_browser: dict[str, Any] | None = None
 
     async def launch(self, config: dict | None = None) -> dict:
         """Launch the Camoufox browser with the given or default config."""
@@ -66,13 +69,16 @@ class BrowserManager:
                     pages_info[name] = p.url
                 except Exception:
                     pages_info[name] = "unknown"
-            return {
+            result = {
                 "status": "already_running",
                 "active_page": self.active_page_name,
                 "pages": pages_info,
                 "contexts": list(self.contexts.keys()),
                 "capturing": self._capturing,
             }
+            if self._runtime_browser is not None:
+                result["browser_runtime"] = self._runtime_browser
+            return result
 
         cfg = {**self.default_config, **(config or {})}
 
@@ -87,6 +93,14 @@ class BrowserManager:
         from camoufox.async_api import AsyncCamoufox
 
         kwargs: dict[str, Any] = {}
+        runtime_browser: dict[str, Any] | None = None
+
+        browser_version = cfg.get("browser_version")
+        if browser_version:
+            from .camoufox_runtime import launch_overrides
+
+            overrides, runtime_browser = launch_overrides(str(browser_version))
+            kwargs.update(overrides)
 
         if cfg.get("proxy"):
             kwargs["proxy"] = cfg["proxy"]
@@ -154,6 +168,7 @@ class BrowserManager:
 
         self._cm = AsyncCamoufox(**kwargs)
         self.browser = await self._cm.__aenter__()
+        self._runtime_browser = runtime_browser
 
         ctx = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
         self.contexts["default"] = ctx
@@ -170,13 +185,16 @@ class BrowserManager:
         self.pages["default"] = page
         self.active_page_name = "default"
 
-        return {
+        result = {
             "status": "launched",
             "headless": headless,
             "os": os_type,
             "locale": locale,
             "pages": list(self.pages.keys()),
         }
+        if runtime_browser is not None:
+            result["browser_runtime"] = runtime_browser
+        return result
 
     async def _connect(self, ws_endpoint: str) -> dict:
         """Attach to an already-running Camoufox Playwright server via its ws:// endpoint.
@@ -419,6 +437,7 @@ class BrowserManager:
         self._cm = None
         self._pw = None
         self._connected = False
+        self._runtime_browser = None
         self._console_logs.clear()
         self._network_requests.clear()
         self._request_id_counter = 0

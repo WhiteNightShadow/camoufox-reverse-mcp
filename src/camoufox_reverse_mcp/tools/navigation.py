@@ -22,6 +22,7 @@ async def launch_browser(
     block_webrtc: bool = False,
     enable_trace: bool = False,
     ws_endpoint: str | None = None,
+    browser_version: str | None = None,
 ) -> dict:
     """Launch the Camoufox anti-detection browser, or attach to a running one.
 
@@ -37,6 +38,13 @@ async def launch_browser(
         enable_trace: Enable engine-level property access tracing.
             Requires camoufox-reverse custom browser build.
             When enabled, use trace_property_access() to capture DOM access.
+        browser_version: Select one already-installed Camoufox 0.5+ browser
+            without changing its persistent active version. Use a repo-qualified
+            selector such as "official/beta.30" or
+            "whitenightshadow/152.0.4-beta.30-reverse.2". Omit it to preserve the
+            active/default behavior, including Camoufox 0.4.x installations.
+            The selected browser must match the active browser's exact
+            version/build because Camoufox reads shared resources from active.
         ws_endpoint: Attach to an already-running Camoufox server instead of
             launching a new browser. Start the server with
             `python -m camoufox server`, copy its "Websocket endpoint:
@@ -66,6 +74,8 @@ async def launch_browser(
             "block_images": block_images, "block_webrtc": block_webrtc,
             "enable_trace": enable_trace,
         }
+        if browser_version:
+            config["browser_version"] = browser_version
         if proxy:
             config["proxy"] = {"server": proxy}
         result = await browser_manager.launch(config)

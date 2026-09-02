@@ -20,6 +20,23 @@ from ..property_trace import (
 
 def _is_trace_enabled() -> bool:
     """Check if any control files exist (= custom browser with trace enabled)."""
+    runtime_browser = getattr(browser_manager, "_runtime_browser", None)
+    if runtime_browser is not None and not runtime_browser.get("property_trace", False):
+        return False
+    if runtime_browser is None:
+        try:
+            from ..camoufox_runtime import inspect_camoufox_runtime
+
+            runtime = inspect_camoufox_runtime()
+            active = runtime.get("active")
+            if (
+                runtime.get("multiversion_supported")
+                and active is not None
+                and not active.get("property_trace", False)
+            ):
+                return False
+        except Exception:
+            pass
     if not CONTROL_DIR.exists():
         return False
     return len(list(CONTROL_DIR.glob("control-*.cmd"))) > 0

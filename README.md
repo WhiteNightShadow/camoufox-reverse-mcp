@@ -111,7 +111,7 @@ pip install -e .
 ### 浏览器控制
 | 工具 | 说明 |
 |------|------|
-| `launch_browser` | 启动 Camoufox 反指纹浏览器 |
+| `launch_browser` | 启动 Camoufox；可用 `browser_version` 单次选择已安装版本，不修改 active 配置 |
 | `close_browser` | 关闭浏览器，释放资源 |
 | `navigate` | 导航到指定 URL（支持 pre_inject_hooks、redirect_chain 追踪） |
 | `reload` | 刷新页面 |
@@ -183,12 +183,28 @@ pip install -e .
 | 工具 | 说明 |
 |------|------|
 | `verify_signer_offline` | 离线验证签名函数：传入样本列表，逐样本字符级对比，定位首偏差点 |
-| `check_environment` | 一站式自检：MCP 版本、依赖、浏览器状态、camoufox-reverse 定制版检测 |
+| `check_environment` | 一站式自检：MCP、依赖、Camoufox Python/active/已安装版本及定制版状态 |
 | `reset_browser_state` | 清理残留（hooks / capture / routes），不关浏览器 |
 
 ### 引擎层属性追踪（v1.1.0 新增）
 
 > 需要 [camoufox-reverse](https://github.com/WhiteNightShadow/camoufox-reverse) 定制版浏览器。未安装时返回错误提示，不影响其他工具使用。
+
+从 v1.3.0 起，Camoufox Python 0.5+ 用户可让官方版和定制版并存，且不改变
+持久化 active 版本：
+
+```text
+check_environment()
+launch_browser(
+  browser_version="whitenightshadow/152.0.4-beta.30-reverse.2",
+  enable_trace=True
+)
+```
+
+`browser_version` 必须使用 `repo/版本或精确目录`，存在同版本多份资产时必须传
+精确目录。省略该参数时启动行为与 v1.2.0 完全相同；Camoufox 0.4.x 用户继续
+使用原来的平铺缓存。所选版本必须与 active 浏览器具有相同完整 version/build，避免
+上游共享资源产生版本混用。MCP 不下载浏览器、不修改 `config.json`，也不会触发缓存迁移。
 
 | 工具 | 说明 |
 |------|------|
@@ -304,6 +320,16 @@ pip install -e .
 
 ## 更新记录
 
+### v1.3.0（2026-09-02）— Camoufox 152 与无侵入多版本选择
+
+- `launch_browser` 新增可选 `browser_version`，单次选择 Camoufox 0.5+ 已安装版本且不修改 active 配置
+- 选择器强制使用 repo 限定并拒绝歧义；active/selected version+build 不一致时明确拒绝
+- `check_environment` 新增 Camoufox Python、active、installed selectors、能力标记及旧缓存迁移风险诊断
+- 修复主机为 `C.UTF-8` 时生成无效 `locale="C"`、导致浏览器无法启动的问题
+- 默认参数保持不变；Camoufox 0.4.x + Firefox 135 用户无需迁移，官方浏览器仍可使用全部非 PropertyTracer 工具
+- 配套可选的 [Camoufox Reverse 152 beta.30](https://github.com/WhiteNightShadow/camoufox-reverse/releases) 预发布构建
+- 感谢 [@dsaw1111](https://github.com/dsaw1111) 报告定制版与官方版本差距
+
 ### v1.2.0（2026-08-11）— 通用源码执行点映射
 
 - `instrumentation(action="install")` 新增默认关闭的 `include_source_site`
@@ -414,6 +440,7 @@ pip install -e .
 - [@tuntun1337](https://github.com/tuntun1337) — 严格 JSON Schema 兼容性
 - [@Code-xy](https://github.com/Code-xy) — Windows 引擎追踪问题定位与验证
 - [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP 执行点关联需求与分析材料
+- [@dsaw1111](https://github.com/dsaw1111) — Camoufox 152 版本差距与 PropertyTracer 升级需求
 
 ## 反馈 / 交流
 

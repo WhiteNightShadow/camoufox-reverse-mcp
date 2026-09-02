@@ -112,7 +112,7 @@ pip install -e .
 ### Browser Control
 | Tool | Description |
 |------|-------------|
-| `launch_browser` | Launch Camoufox anti-detection browser |
+| `launch_browser` | Launch Camoufox; optionally select one installed version without changing active config |
 | `close_browser` | Close browser and release resources |
 | `navigate` | Navigate to URL (supports pre_inject_hooks, redirect_chain tracking) |
 | `reload` | Reload current page |
@@ -186,8 +186,25 @@ For scripts over 200KB that require a full rewrite, explicitly set
 | Tool | Description |
 |------|-------------|
 | `verify_signer_offline` | Offline signer verification: provide samples, get char-level diff at first divergence |
-| `check_environment` | One-stop self-check: MCP version, dependencies, browser state |
+| `check_environment` | MCP/dependency checks plus Camoufox Python, active and installed-version diagnostics |
 | `reset_browser_state` | Clear residuals (hooks / capture / routes) without closing browser |
+
+Starting with v1.3.0, Camoufox Python 0.5+ can keep the official and reverse
+builds side by side without changing the persistent active browser:
+
+```text
+check_environment()
+launch_browser(
+  browser_version="whitenightshadow/152.0.4-beta.30-reverse.2",
+  enable_trace=True
+)
+```
+
+`browser_version` must be repo-qualified, and an exact folder is required when
+multiple assets share a version. Omitting it preserves v1.2.0 behavior,
+including Camoufox 0.4.x flat-cache installations. The selected and active
+browsers must share the exact version/build to prevent upstream resource mixing. The MCP never downloads a
+browser, changes `config.json`, or initiates cache migration.
 
 ---
 
@@ -267,6 +284,16 @@ For scripts over 200KB that require a full rewrite, explicitly set
 
 ## Changelog
 
+### v1.3.0 (2026-09-02) — Camoufox 152 and Non-Invasive Version Selection
+
+- Add optional `browser_version` to select an installed Camoufox 0.5+ build for one launch without changing active config
+- Require a repo-qualified, unambiguous selector and reject mismatched active/selected version builds
+- Extend `check_environment` with Camoufox Python, active/installed selectors, capability markers, and legacy-cache migration warnings
+- Fix browser launch on hosts using `C.UTF-8` instead of emitting invalid `locale="C"`
+- Keep defaults unchanged; Camoufox 0.4.x + Firefox 135 users do not need to migrate, and official builds retain every non-PropertyTracer MCP tool
+- Pair with the opt-in [Camoufox Reverse 152 beta.30](https://github.com/WhiteNightShadow/camoufox-reverse/releases) prerelease
+- Thanks to [@dsaw1111](https://github.com/dsaw1111) for reporting the browser-version gap
+
 ### v1.2.0 (2026-08-11) — Generic Source-Site Mapping
 
 - Add opt-in `include_source_site` to `instrumentation(action="install")`
@@ -339,6 +366,7 @@ For scripts over 200KB that require a full rewrite, explicitly set
 - [@tuntun1337](https://github.com/tuntun1337) — strict JSON Schema compatibility
 - [@Code-xy](https://github.com/Code-xy) — Windows engine-trace diagnosis and validation
 - [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP execution-site requirements and analysis materials
+- [@dsaw1111](https://github.com/dsaw1111) — Camoufox 152 version-gap and PropertyTracer upgrade request
 
 ## Feedback / Contact
 
