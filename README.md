@@ -196,7 +196,7 @@ pip install -e .
 ```text
 check_environment()
 launch_browser(
-  browser_version="whitenightshadow/152.0.4-beta.30-reverse.4",
+  browser_version="whitenightshadow/152.0.4-beta.30-reverse.5",
   enable_trace=True
 )
 ```
@@ -208,7 +208,7 @@ launch_browser(
 
 | 工具 | 说明 |
 |------|------|
-| `trace_property_access` | Gecko 原生 DOM/Web API 定点追踪，覆盖 75 个指纹相关注入点，不改写页面 JS 对象/描述符/原型。支持 `action=capture/start/stop/query/clear/status`、summary/timeline/sequence/search、get/set/call、对象与 native site 过滤。`collect_values=True` 仅做追踪后的安全快照并列出跳过项，不代表事件发生时的值 |
+| `trace_property_access` | Gecko 原生 DOM/Web API 定点追踪；reverse.5 声明 77 点，旧兼容构建为 75 点，不改写页面 JS 对象/描述符/原型。支持 `action=capture/start/stop/query/clear/status`、summary/timeline/sequence/search、get/set/call、对象与 native site 过滤。`collect_values=True` 仅做追踪后的安全快照并列出跳过项，不代表事件发生时的值 |
 | `list_trace_files` | 跨独立 run 目录列出 trace 文件（用于事后分析） |
 | `query_trace_file` | 查询 trace 缓存内的历史文件，支持对象、关键词、kind 与 site 过滤 |
 
@@ -272,7 +272,7 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
 
 ```
 1. launch_browser(
-     browser_version="whitenightshadow/152.0.4-beta.30-reverse.4",
+     browser_version="whitenightshadow/152.0.4-beta.30-reverse.5",
      enable_trace=True
    )                                           ← 显式启动定制版
 2. trace_property_access(action="start")       ← 清空旧窗口并立即返回
@@ -294,12 +294,13 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
 ```
 
 **与 compare_env 的区别**：
-- `trace_property_access`：对 75 个 Gecko 原生注入点提供强证据；未命中不能证明
+- `trace_property_access`：对当前构建声明的固定 Gecko 原生注入点提供强证据；
+  reverse.5 为 77 点，未命中不能证明
   覆盖范围外的属性未被读取，也可能有高负载时间侧信道
 - `compare_env`：采集一组 JS 层环境基线；可通过 `properties` 或分批
   `evaluate_js` 扩展，不能视为全量枚举
 - 路径 B 环境伪装时，用 trace 命中确定优先调查/补齐对象，再结合
-  `compare_env` 与动态验证确认完整范围，避免把 75 点之外的未命中误作否定证据
+  `compare_env` 与动态验证确认完整范围，避免把覆盖集之外的未命中误作否定证据
 
 ---
 
@@ -319,7 +320,7 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
 │  │ Capture  │ Analysis │ Storage  │  Signer  │  │
 │  ├──────────┴──────────┴──────────┴──────────┤  │
 │  │ ★ PropertyTracer (trace_property_access)  │  │
-│  │   Gecko 原生 75 点追踪（不改写页面 JS）      │  │
+│  │   Gecko 原生固定点追踪（不改写页面 JS）       │  │
 │  └───────────────────────────────────────────┘  │
 │                    ↕ Playwright API               │
 ├─────────────────────────────────────────────────┤
@@ -331,6 +332,14 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
 ---
 
 ## 更新记录
+
+### v1.4.1（2026-09-03）— Firefox 152 LocalStorage 追踪路径对齐
+
+- 配套 `camoufox-reverse` reverse.5，将既有 `localStorage.getItem/setItem`
+  两点迁移到 Firefox 152 默认 LSNG `LSObject` 路径
+- PropertyTracer 扩为 77 点、protocol 1 不变，事件 object/property/kind 与
+  MCP 聚合行为不变；LSObject 与 partitioned 路径由 native site 区分
+- MCP 解析器无需行为改动；默认 Trace-off、135/reverse.3/reverse.4 兼容路径不变
 
 ### v1.4.0（2026-09-03）— PropertyTracer 正确性、隔离与交互追踪
 

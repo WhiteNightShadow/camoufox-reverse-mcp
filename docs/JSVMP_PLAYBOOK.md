@@ -84,7 +84,8 @@ log = await get_instrumentation_log(tag_filter="vmp",
 - ❌ `pre_inject_hooks=["jsvmp_probe"]` — 签名会废
 - ❌ `hook_jsvmp_interpreter(mode="proxy")` — 同上
 - ✅ 定制版可使用 `trace_property_access(action="start")` → 触发行为 →
-  `trace_property_access(action="stop")`。它在 75 个 Gecko 原生注入点记录，
+  `trace_property_access(action="stop")`。它在当前构建声明的固定 Gecko 原生点
+  记录（reverse.5 为 77 点），
   不替换 getter/Proxy；但未命中不是“未访问”的证明，高负载仍可能形成时间侧信道
 - ⚠️ `hook_jsvmp_interpreter(mode="transparent")` — 比 proxy 模式安全得多,但某些极严格的 RS 版本仍能感知 descriptor 的 getter 函数 identity 变化。只有在源码插桩失败时才退到这里
 

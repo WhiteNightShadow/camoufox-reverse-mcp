@@ -195,7 +195,7 @@ builds side by side without changing the persistent active browser:
 ```text
 check_environment()
 launch_browser(
-  browser_version="whitenightshadow/152.0.4-beta.30-reverse.4",
+  browser_version="whitenightshadow/152.0.4-beta.30-reverse.5",
   enable_trace=True
 )
 ```
@@ -208,7 +208,7 @@ browser, changes `config.json`, or initiates cache migration.
 
 ### Native PropertyTracer
 
-The reverse browser covers 75 fingerprint-relevant Gecko DOM/Web API native
+Reverse.5 covers 77 fingerprint-relevant Gecko DOM/Web API native
 sites without rewriting page JavaScript objects, descriptors, or prototypes.
 A hit is strong evidence; a miss is not proof that an unhooked property was not
 used. High event rates can still create a timing side channel.
@@ -311,6 +311,17 @@ trace_property_access(action="stop", mode="summary")
 ---
 
 ## Changelog
+
+### v1.4.1 (2026-09-03) — Firefox 152 LocalStorage Trace Path
+
+- Pair with `camoufox-reverse` reverse.5, which moves the existing
+  `localStorage.getItem/setItem` sites to Firefox 152's default LSNG `LSObject`
+  path
+- Expand the build-declared set to 77 sites while keeping protocol 1 and event
+  object/property/kind fields unchanged; native sites distinguish LSObject and
+  the separately reachable partitioned implementation
+- No parser behavior changes; trace-off and 135/reverse.3/reverse.4 compatibility
+  remain unchanged
 
 ### v1.4.0 (2026-09-03) — Correct, Isolated, Interactive PropertyTracer
 

@@ -47,7 +47,7 @@ def test_new_tools_count():
 
 def test_version():
     from camoufox_reverse_mcp import __version__
-    assert __version__ == "1.4.0"
+    assert __version__ == "1.4.1"
 
     pyproject = (Path(__file__).parents[1] / "pyproject.toml").read_text()
     project_version = re.search(r'^version = "([^"]+)"$', pyproject, re.MULTILINE)

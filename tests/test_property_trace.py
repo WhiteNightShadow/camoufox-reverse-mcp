@@ -310,6 +310,8 @@ async def test_historical_empty_result_keeps_native_coverage_boundary(
     assert result["total_events"] == 0
     assert result["possibly_capped"] is None
     assert result["cap_known"] is False
+    assert result["coverage"]["hook_count"] is None
+    assert result["coverage"]["hook_count_known"] is False
     assert result["coverage"]["negative_result_is_conclusive"] is False
 
 

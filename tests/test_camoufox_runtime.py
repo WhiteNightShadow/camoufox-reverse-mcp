@@ -85,7 +85,11 @@ def test_reads_release_or_build_and_capabilities_marker(tmp_path):
     assert current_meta["property_trace"] is False
 
 
-def test_reads_trace_protocol_and_features(tmp_path):
+@pytest.mark.parametrize(
+    ("reverse_release", "hook_count"),
+    [("reverse.4", 75), ("reverse.5", 77)],
+)
+def test_reads_trace_protocol_and_features(tmp_path, reverse_release, hook_count):
     root = tmp_path / "reverse"
     _write_version(root, build="beta.30")
     (root / camoufox_runtime.CAPABILITIES_FILE).write_text(
@@ -93,10 +97,10 @@ def test_reads_trace_protocol_and_features(tmp_path):
             "schema": 1,
             "distribution": "WhiteNightShadow/camoufox-reverse",
             "upstream_version": "152.0.4-beta.30",
-            "reverse_release": "reverse.4",
+            "reverse_release": reverse_release,
             "property_trace": True,
             "property_trace_protocol": 1,
-            "property_trace_hooks": 75,
+            "property_trace_hooks": hook_count,
             "property_trace_features": REVERSE4_TRACE_FEATURES,
         }),
         encoding="utf-8",
@@ -104,8 +108,9 @@ def test_reads_trace_protocol_and_features(tmp_path):
     metadata = camoufox_runtime._read_browser_metadata(root)
     assert metadata["property_trace_compatible"] is True
     assert metadata["property_trace_protocol"] == 1
-    assert metadata["property_trace_hooks"] == 75
+    assert metadata["property_trace_hooks"] == hook_count
     assert metadata["property_trace_features"] == REVERSE4_TRACE_FEATURES
+    assert metadata["reverse_release"] == reverse_release
 
 
 def test_multiversion_runtime_is_read_only_and_resolves_exact_repo(monkeypatch, tmp_path):

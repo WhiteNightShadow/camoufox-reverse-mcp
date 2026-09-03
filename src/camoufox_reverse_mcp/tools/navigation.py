@@ -41,12 +41,13 @@ async def launch_browser(
             Requires camoufox-reverse custom browser build.
             When enabled, use trace_property_access() to capture DOM access.
         trace_objects: Optional exact native object-name allowlist (for example
-            ["navigator", "screen", "webgl"]). Empty traces all 75 covered sites.
+            ["navigator", "screen", "webgl"]). Empty traces all native sites
+            declared by the selected reverse build.
         trace_max_events: Per Firefox process/session event cap (1..200000).
         browser_version: Select one already-installed Camoufox 0.5+ browser
             without changing its persistent active version. Use a repo-qualified
             selector such as "official/beta.30" or
-            "whitenightshadow/152.0.4-beta.30-reverse.4". Omit it to preserve the
+            "whitenightshadow/152.0.4-beta.30-reverse.5". Omit it to preserve the
             active/default behavior, including Camoufox 0.4.x installations.
             The selected browser must match the active browser's exact
             version/build because Camoufox reads shared resources from active.

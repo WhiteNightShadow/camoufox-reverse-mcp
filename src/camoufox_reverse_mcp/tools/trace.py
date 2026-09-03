@@ -67,7 +67,8 @@ async def _trace_property_access_impl(
 ) -> dict:
     """Native Gecko DOM/Web API access tracing without page-object rewriting.
 
-    The custom browser records a fixed native coverage set (75 injection sites).
+    The custom browser records a build-declared fixed native coverage set
+    (77 injection sites in reverse.5; 75 in earlier compatible builds).
     A hit is strong evidence of an access; a miss is not proof that an unhooked
     property was unused. The tracer does not install JS getters, Proxies, or
     globals, although high-volume tracing can still create a timing side channel.
@@ -355,7 +356,7 @@ async def _trace_property_access_impl(
         return {
             "mode": "error",
             "reason": "No trace events captured during the window.",
-            "hint": "Ensure the page action touches one of the 75 covered native sites.",
+            "hint": "Ensure the page action touches one of this build's covered native sites.",
             "run_dir": str(trace_base),
             "possibly_capped": False,
             "input_truncated": input_truncated,
@@ -600,7 +601,8 @@ async def query_trace_file(
     result["cap_known"] = False
     result["coverage"] = {
         "scope": "fingerprint-native",
-        "hook_count": 75,
+        "hook_count": None,
+        "hook_count_known": False,
         "protocol": 1,
         "features": [],
         "negative_result_is_conclusive": False,
