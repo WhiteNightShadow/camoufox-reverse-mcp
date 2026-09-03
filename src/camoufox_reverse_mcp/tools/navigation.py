@@ -5,7 +5,7 @@ import base64
 import json as _json
 import os
 
-from ..server import mcp, browser_manager
+from ..server import browser_manager, mcp
 
 _PRE_INJECT_REGISTER_TIMEOUT = 10.0
 
@@ -21,6 +21,8 @@ async def launch_browser(
     block_images: bool = False,
     block_webrtc: bool = False,
     enable_trace: bool = False,
+    trace_objects: list[str] | None = None,
+    trace_max_events: int = 100000,
     ws_endpoint: str | None = None,
     browser_version: str | None = None,
 ) -> dict:
@@ -38,10 +40,13 @@ async def launch_browser(
         enable_trace: Enable engine-level property access tracing.
             Requires camoufox-reverse custom browser build.
             When enabled, use trace_property_access() to capture DOM access.
+        trace_objects: Optional exact native object-name allowlist (for example
+            ["navigator", "screen", "webgl"]). Empty traces all 75 covered sites.
+        trace_max_events: Per Firefox process/session event cap (1..200000).
         browser_version: Select one already-installed Camoufox 0.5+ browser
             without changing its persistent active version. Use a repo-qualified
             selector such as "official/beta.30" or
-            "whitenightshadow/152.0.4-beta.30-reverse.3". Omit it to preserve the
+            "whitenightshadow/152.0.4-beta.30-reverse.4". Omit it to preserve the
             active/default behavior, including Camoufox 0.4.x installations.
             The selected browser must match the active browser's exact
             version/build because Camoufox reads shared resources from active.
@@ -73,6 +78,8 @@ async def launch_browser(
             "humanize": humanize, "geoip": geoip,
             "block_images": block_images, "block_webrtc": block_webrtc,
             "enable_trace": enable_trace,
+            "trace_objects": trace_objects or [],
+            "trace_max_events": trace_max_events,
         }
         if browser_version:
             config["browser_version"] = browser_version
@@ -102,8 +109,7 @@ async def launch_browser(
         return {"error": str(e)}
 
 
-@mcp.tool()
-async def close_browser() -> dict:
+async def _close_browser_impl() -> dict:
     """Close the Camoufox browser and release all resources."""
     try:
         from .instrumentation import (
@@ -122,6 +128,13 @@ async def close_browser() -> dict:
         return result
     except Exception as e:
         return {"error": str(e)}
+
+
+@mcp.tool()
+async def close_browser() -> dict:
+    """Close the browser after serializing any native trace transition."""
+    async with browser_manager._trace_action_lock:
+        return await _close_browser_impl()
 
 
 @mcp.tool()
@@ -410,11 +423,11 @@ async def get_page_info() -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
-async def reset_browser_state(
+async def _reset_browser_state_impl(
     clear_persistent_hooks: bool = True,
     clear_network_capture: bool = True,
     clear_active_routes: bool = True,
+    stop_engine_trace: bool = True,
     clear_cookies: bool = False,
     clear_storage: bool = False,
 ) -> dict:
@@ -424,6 +437,7 @@ async def reset_browser_state(
         clear_persistent_hooks: Remove all persistent init scripts.
         clear_network_capture: Clear network request buffer and stop captures.
         clear_active_routes: Clear instrumentation routes.
+        stop_engine_trace: Stop only this launch's native PropertyTracer session.
         clear_cookies: ALSO clear browser cookies (destructive; default False).
         clear_storage: ALSO clear localStorage/sessionStorage (default False).
     """
@@ -459,6 +473,32 @@ async def reset_browser_state(
                 result["source_sites_cleared"] = site_count
             except Exception as e:
                 result["instrumentation_clear_error"] = str(e)
+        if stop_engine_trace:
+            try:
+                from ..property_trace import set_trace_state
+
+                trace_base = getattr(browser_manager, "_trace_base_dir", None)
+                if trace_base:
+                    transition = await set_trace_state(
+                        "off",
+                        trace_base,
+                        features=(browser_manager._runtime_browser or {}).get(
+                            "property_trace_features", []
+                        ),
+                    )
+                    result["engine_trace_processes_stopped"] = transition.get(
+                        "count", 0
+                    )
+                    result["engine_trace_acknowledged"] = transition.get(
+                        "acknowledged", False
+                    )
+                    if transition.get("error"):
+                        result["engine_trace_stop_error"] = transition["error"]
+                    browser_manager._trace_started_at = None
+                else:
+                    result["engine_trace_processes_stopped"] = 0
+            except Exception as e:
+                result["engine_trace_stop_error"] = str(e)
         if clear_cookies:
             try:
                 ctx = browser_manager.contexts.get("default")
@@ -480,3 +520,24 @@ async def reset_browser_state(
         return result
     except Exception as e:
         return {"error": str(e)}
+
+
+@mcp.tool()
+async def reset_browser_state(
+    clear_persistent_hooks: bool = True,
+    clear_network_capture: bool = True,
+    clear_active_routes: bool = True,
+    stop_engine_trace: bool = True,
+    clear_cookies: bool = False,
+    clear_storage: bool = False,
+) -> dict:
+    """Reset browser residual state after serializing trace transitions."""
+    async with browser_manager._trace_action_lock:
+        return await _reset_browser_state_impl(
+            clear_persistent_hooks=clear_persistent_hooks,
+            clear_network_capture=clear_network_capture,
+            clear_active_routes=clear_active_routes,
+            stop_engine_trace=stop_engine_trace,
+            clear_cookies=clear_cookies,
+            clear_storage=clear_storage,
+        )

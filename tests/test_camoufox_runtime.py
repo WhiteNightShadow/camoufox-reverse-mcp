@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -8,6 +9,18 @@ import pytest
 
 from camoufox_reverse_mcp import camoufox_runtime
 from camoufox_reverse_mcp.browser import BrowserManager
+
+REVERSE4_TRACE_FEATURES = [
+    "async_buffered_io",
+    "event_kind",
+    "native_site",
+    "wall_time_us",
+    "sequence",
+    "exclusive_session_files",
+    "control_ack",
+    "utf8_paths",
+    "process_scope",
+]
 
 
 def _write_version(root: Path, *, version="152.0.4", build=None, release=None):
@@ -67,8 +80,32 @@ def test_reads_release_or_build_and_capabilities_marker(tmp_path):
 
     assert legacy_meta["build"] == "beta.25"
     assert legacy_meta["property_trace"] is True
+    assert legacy_meta["property_trace_compatible"] is False
     assert current_meta["build"] == "beta.28"
     assert current_meta["property_trace"] is False
+
+
+def test_reads_trace_protocol_and_features(tmp_path):
+    root = tmp_path / "reverse"
+    _write_version(root, build="beta.30")
+    (root / camoufox_runtime.CAPABILITIES_FILE).write_text(
+        json.dumps({
+            "schema": 1,
+            "distribution": "WhiteNightShadow/camoufox-reverse",
+            "upstream_version": "152.0.4-beta.30",
+            "reverse_release": "reverse.4",
+            "property_trace": True,
+            "property_trace_protocol": 1,
+            "property_trace_hooks": 75,
+            "property_trace_features": REVERSE4_TRACE_FEATURES,
+        }),
+        encoding="utf-8",
+    )
+    metadata = camoufox_runtime._read_browser_metadata(root)
+    assert metadata["property_trace_compatible"] is True
+    assert metadata["property_trace_protocol"] == 1
+    assert metadata["property_trace_hooks"] == 75
+    assert metadata["property_trace_features"] == REVERSE4_TRACE_FEATURES
 
 
 def test_multiversion_runtime_is_read_only_and_resolves_exact_repo(monkeypatch, tmp_path):
@@ -295,13 +332,20 @@ async def test_trace_launch_passes_selection_to_launch_options(monkeypatch, tmp_
     from camoufox_reverse_mcp import property_trace
 
     monkeypatch.setattr(property_trace, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(property_trace, "ensure_dirs", lambda: None)
     monkeypatch.setattr(property_trace, "cleanup_old_traces", lambda **_kwargs: 0)
-    monkeypatch.setattr(property_trace, "cleanup_traces", lambda: None)
+    monkeypatch.setattr(property_trace, "cleanup_old_runs", lambda **_kwargs: 0)
+    trace_run = tmp_path / "run"
+    trace_run.mkdir()
+    monkeypatch.setattr(property_trace, "create_trace_run", lambda: trace_run)
     monkeypatch.setattr(
         property_trace,
         "build_property_trace_config",
-        lambda: {"enabled": True, "logDir": str(tmp_path)},
+        lambda base, *, objects, max_events: {
+            "enabled": True,
+            "logDir": str(base),
+            "objects": objects,
+            "maxEventsPerSession": max_events,
+        },
     )
 
     manager = BrowserManager()
@@ -317,6 +361,38 @@ async def test_trace_launch_passes_selection_to_launch_options(monkeypatch, tmp_
     assert "ff_version" not in captured["launch_options_kwargs"]
     assert captured["async_kwargs"]["from_options"]["env"]["CAMOU_CONFIG_1"]
     assert result["browser_runtime"] == selected
+
+
+@pytest.mark.asyncio
+async def test_official_browser_ignores_trace_without_disabling_sandbox(monkeypatch):
+    selected = {
+        "launch_selector": "official/152.0.4-beta.30-aabbccdd",
+        "firefox_major": 152,
+        "repo": "official",
+        "property_trace": False,
+        "capabilities_marker": None,
+    }
+    monkeypatch.setattr(
+        camoufox_runtime,
+        "launch_overrides",
+        lambda _selector: ({"browser": selected["launch_selector"]}, selected),
+    )
+    captured = {}
+    _install_fake_camoufox(monkeypatch, captured)
+
+    manager = BrowserManager()
+    result = await manager.launch(
+        {
+            "headless": True,
+            "enable_trace": True,
+            "browser_version": "official/beta.30",
+        }
+    )
+
+    assert "from_options" not in captured["async_kwargs"]
+    assert result["engine_trace"]["requested"] is True
+    assert result["engine_trace"]["enabled"] is False
+    assert "ignored" in result["warnings"][0]
 
 
 @pytest.mark.asyncio
@@ -366,10 +442,8 @@ async def test_check_environment_includes_read_only_camoufox_runtime(monkeypatch
 def test_explicit_official_browser_ignores_stale_trace_controls(monkeypatch, tmp_path):
     from camoufox_reverse_mcp.tools import trace
 
-    control_dir = tmp_path / "control"
-    control_dir.mkdir()
-    (control_dir / "control-123.cmd").write_text("on", encoding="utf-8")
-    monkeypatch.setattr(trace, "CONTROL_DIR", control_dir)
+    monkeypatch.setattr(trace.browser_manager, "browser", None)
+    monkeypatch.setattr(trace.browser_manager, "_trace_base_dir", tmp_path)
     monkeypatch.setattr(
         trace.browser_manager,
         "_runtime_browser",
@@ -384,21 +458,32 @@ def test_default_multiversion_official_ignores_stale_trace_controls(
 ):
     from camoufox_reverse_mcp.tools import trace
 
-    control_dir = tmp_path / "control"
-    control_dir.mkdir()
-    (control_dir / "control-123.cmd").write_text("on", encoding="utf-8")
-    monkeypatch.setattr(trace, "CONTROL_DIR", control_dir)
+    monkeypatch.setattr(trace.browser_manager, "browser", None)
+    monkeypatch.setattr(trace.browser_manager, "_trace_base_dir", tmp_path)
     monkeypatch.setattr(trace.browser_manager, "_runtime_browser", None)
-    monkeypatch.setattr(
-        camoufox_runtime,
-        "inspect_camoufox_runtime",
-        lambda: {
-            "multiversion_supported": True,
-            "active": {"repo": "official", "property_trace": False},
-        },
-    )
 
     assert trace._is_trace_enabled() is False
+
+
+def test_markerless_legacy_135_uses_live_run_handshake(monkeypatch, tmp_path):
+    from camoufox_reverse_mcp.tools import trace
+
+    control = tmp_path / "control"
+    control.mkdir()
+    (control / f"control-{os.getpid()}.cmd").write_text("on", encoding="utf-8")
+    monkeypatch.setattr(trace.browser_manager, "browser", object())
+    monkeypatch.setattr(trace.browser_manager, "_trace_base_dir", tmp_path)
+    monkeypatch.setattr(
+        trace.browser_manager,
+        "_runtime_browser",
+        {
+            "repo": None,
+            "property_trace": False,
+            "capabilities_marker": None,
+            "property_trace_protocol": None,
+        },
+    )
+    assert trace._is_trace_enabled() is True
 
 
 @pytest.mark.asyncio
@@ -419,3 +504,38 @@ async def test_check_environment_fails_when_camoufox_has_no_active_browser(monke
     result = await environment.check_environment()
 
     assert result["overall_ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_check_environment_does_not_treat_stale_control_as_active(
+    monkeypatch, tmp_path
+):
+    from camoufox_reverse_mcp import property_trace
+    from camoufox_reverse_mcp.tools import environment
+
+    cache = tmp_path / "trace-cache"
+    control = cache / "control"
+    control.mkdir(parents=True)
+    (control / "control-99999999.cmd").write_text("on", encoding="utf-8")
+    monkeypatch.setattr(property_trace, "CACHE_DIR", cache)
+    monkeypatch.setattr(property_trace, "CONTROL_DIR", control)
+    monkeypatch.setattr(property_trace, "RUNS_DIR", cache / "runs")
+    monkeypatch.setattr(environment.browser_manager, "browser", None)
+    monkeypatch.setattr(environment.browser_manager, "_trace_base_dir", None)
+    monkeypatch.setattr(environment.browser_manager, "_runtime_browser", None)
+    monkeypatch.setattr(
+        camoufox_runtime,
+        "inspect_camoufox_runtime",
+        lambda: {
+            "python_version": "0.5.6",
+            "multiversion_supported": True,
+            "active": {"selector": "official/beta.30", "property_trace": False},
+            "installed": [],
+            "legacy_cache_migration_risk": False,
+        },
+    )
+
+    result = await environment.check_environment()
+    assert result["camoufox_reverse"]["installed"] is False
+    assert result["camoufox_reverse"]["trace_active"] is False
+    assert result["camoufox_reverse"]["stale_control_files"] == 1

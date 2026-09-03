@@ -14,8 +14,8 @@ from importlib.metadata import version as distribution_version
 from pathlib import Path
 from typing import Any
 
-
 CAPABILITIES_FILE = "camoufox-reverse-capabilities.json"
+SUPPORTED_PROPERTY_TRACE_PROTOCOLS = {1}
 
 
 def _package_version() -> str:
@@ -75,11 +75,29 @@ def _read_browser_metadata(root: Path) -> dict[str, Any]:
         or "property_trace" in normalized
         or "propertyTrace" in normalized
     )
+    protocol = marker.get("property_trace_protocol")
+    hooks = marker.get("property_trace_hooks")
+    features = marker.get("property_trace_features")
+    if not isinstance(features, list):
+        features = []
+    protocol_compatible = bool(
+        property_trace
+        and isinstance(protocol, int)
+        and protocol in SUPPORTED_PROPERTY_TRACE_PROTOCOLS
+    )
     return {
         "version": str(version) if version is not None else None,
         "build": str(build) if build is not None else None,
         "capabilities": sorted(normalized),
         "property_trace": property_trace,
+        "property_trace_protocol": protocol if isinstance(protocol, int) else None,
+        "property_trace_hooks": hooks if isinstance(hooks, int) else None,
+        "property_trace_features": [str(item) for item in features],
+        "property_trace_compatible": protocol_compatible,
+        "capabilities_schema": marker.get("schema") if marker else None,
+        "distribution": marker.get("distribution") if marker else None,
+        "upstream_version": marker.get("upstream_version") if marker else None,
+        "reverse_release": marker.get("reverse_release") if marker else None,
         "capabilities_marker": str(root / CAPABILITIES_FILE) if marker else None,
     }
 
@@ -116,6 +134,14 @@ def _public_install(
         "active": active,
         "capabilities": metadata["capabilities"],
         "property_trace": metadata["property_trace"],
+        "property_trace_protocol": metadata["property_trace_protocol"],
+        "property_trace_hooks": metadata["property_trace_hooks"],
+        "property_trace_features": metadata["property_trace_features"],
+        "property_trace_compatible": metadata["property_trace_compatible"],
+        "capabilities_schema": metadata["capabilities_schema"],
+        "distribution": metadata["distribution"],
+        "upstream_version": metadata["upstream_version"],
+        "reverse_release": metadata["reverse_release"],
         "capabilities_marker": metadata["capabilities_marker"],
     }
 

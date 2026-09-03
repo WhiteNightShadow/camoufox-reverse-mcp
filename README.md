@@ -17,7 +17,7 @@
 | Hook 持久化 | 不支持 | **context 级持久化，导航后自动重注入** |
 
 **核心优势：**
-- Camoufox 在 **C++ 层面** 修改指纹信息，非 JS 层 patch，从根源不可检测
+- Camoufox 在 **C++ 层面** 修改指纹信息，不依赖页面 JS patch，避免常见的 descriptor/prototype 泄露
 - Juggler 协议沙箱隔离使 Playwright **完全不可被页面 JS 检测到**
 - BrowserForge 按 **真实世界流量统计分布** 生成指纹，不是随机拼凑
 - 能在 RS、AK、JY、CF 等各类强反爬站点上正常工作
@@ -106,7 +106,7 @@ pip install -e .
 
 ---
 
-## 可用工具一览（35 个）
+## 可用工具一览
 
 ### 浏览器控制
 | 工具 | 说明 |
@@ -184,7 +184,7 @@ pip install -e .
 |------|------|
 | `verify_signer_offline` | 离线验证签名函数：传入样本列表，逐样本字符级对比，定位首偏差点 |
 | `check_environment` | 一站式自检：MCP、依赖、Camoufox Python/active/已安装版本及定制版状态 |
-| `reset_browser_state` | 清理残留（hooks / capture / routes），不关浏览器 |
+| `reset_browser_state` | 清理残留（hooks / capture / routes / 当前 engine trace），不关浏览器 |
 
 ### 引擎层属性追踪（v1.1.0 新增）
 
@@ -196,7 +196,7 @@ pip install -e .
 ```text
 check_environment()
 launch_browser(
-  browser_version="whitenightshadow/152.0.4-beta.30-reverse.3",
+  browser_version="whitenightshadow/152.0.4-beta.30-reverse.4",
   enable_trace=True
 )
 ```
@@ -208,9 +208,13 @@ launch_browser(
 
 | 工具 | 说明 |
 |------|------|
-| `trace_property_access` | C++ 引擎层 DOM 属性访问追踪（JSVMP 不可检测）。支持 summary/timeline/sequence/search 四种视图。`duration=0` 读取启动以来的全部事件，`duration>0` 开启新的追踪窗口。`collect_values=True` 自动从浏览器读取所有属性的真实值（大值保存到文件） |
-| `list_trace_files` | 列出本地所有 trace 文件（用于事后分析） |
-| `query_trace_file` | 查询指定的历史 trace 文件，支持按对象/关键词过滤 |
+| `trace_property_access` | Gecko 原生 DOM/Web API 定点追踪，覆盖 75 个指纹相关注入点，不改写页面 JS 对象/描述符/原型。支持 `action=capture/start/stop/query/clear/status`、summary/timeline/sequence/search、get/set/call、对象与 native site 过滤。`collect_values=True` 仅做追踪后的安全快照并列出跳过项，不代表事件发生时的值 |
+| `list_trace_files` | 跨独立 run 目录列出 trace 文件（用于事后分析） |
+| `query_trace_file` | 查询 trace 缓存内的历史文件，支持对象、关键词、kind 与 site 过滤 |
+
+每次 `enable_trace=True` 启动都会使用独立 run 目录，只控制本次浏览器的
+PID，不会清理或开关其他 MCP 实例。开启 engine trace 时会临时关闭 Firefox
+content sandbox 以允许内容进程写入；普通启动不会改动 sandbox。
 
 ---
 
@@ -267,25 +271,31 @@ launch_browser(
 > 需要 [camoufox-reverse 定制版浏览器](https://github.com/WhiteNightShadow/camoufox-reverse/releases)
 
 ```
-1. launch_browser(enable_trace=True)           ← 启动带 C++ 追踪的浏览器
+1. launch_browser(
+     browser_version="whitenightshadow/152.0.4-beta.30-reverse.4",
+     enable_trace=True
+   )                                           ← 显式启动定制版
 2. navigate("https://www.douyin.com/video/xxx") ← JSVMP 执行，事件自动记录
-3. trace_property_access(duration=0, mode="summary", collect_values=True)
-   → 返回 JSVMP 实际读取的 42 个 DOM 属性、访问频次、以及真实值
-   → 小值内联返回，大值（Canvas/WebGL/Cookie 等）自动保存到
-     ~/.cache/camoufox-reverse/values/ 目录
+3. trace_property_access(action="start")       ← 立即返回
+4. # 执行 click/evaluate 等目标操作
+5. trace_property_access(action="stop", mode="summary", collect_values=True)
+   → 返回覆盖范围内命中的属性、频次、get/set/call、进程与 native site
+   → snapshot_values 是操作后的安全快照；Cookie、Canvas、WebGL、Audio 等
+     敏感或有副作用的路径会进入 values_skipped
 
 # 按时间线查看属性访问节奏
-4. trace_property_access(duration=0, mode="timeline", bucket_ms=500)
+6. trace_property_access(action="query", mode="timeline", bucket_ms=500)
 
 # 按对象过滤
-5. trace_property_access(duration=0, filter_object="webgl")
+7. trace_property_access(action="query", filter_object="webgl")
 
 # 搜索特定属性
-6. trace_property_access(duration=0, mode="search", search_query="cookie")
+8. trace_property_access(action="query", mode="search", search_query="cookie")
 ```
 
 **与 compare_env 的区别**：
-- `trace_property_access`：追踪 JSVMP **实际读取**的属性（精准，C++ 层，不可检测）
+- `trace_property_access`：对 75 个 Gecko 原生注入点提供强证据；未命中不能证明
+  覆盖范围外的属性未被读取，也可能有高负载时间侧信道
 - `compare_env`：采集浏览器**所有**环境属性（全量，JS 层）
 - 路径 B 环境伪装时，用 trace 结果决定"补哪些属性"，避免补多了引入新泄露点
 
@@ -298,7 +308,7 @@ launch_browser(
 │           AI 编码助手 (Cursor / Claude)          │
 │                    ↕ MCP (stdio)                 │
 ├─────────────────────────────────────────────────┤
-│           camoufox-reverse-mcp (35 tools)        │
+│              camoufox-reverse-mcp                │
 │  ┌──────────┬──────────┬──────────┬──────────┐  │
 │  │Navigation│ Script   │Debugging │ Hooking  │  │
 │  │          │ Analysis │          │          │  │
@@ -307,7 +317,7 @@ launch_browser(
 │  │ Capture  │ Analysis │ Storage  │  Signer  │  │
 │  ├──────────┴──────────┴──────────┴──────────┤  │
 │  │ ★ PropertyTracer (trace_property_access)  │  │
-│  │   C++ 引擎层 DOM 属性追踪（JSVMP 不可检测）  │  │
+│  │   Gecko 原生 75 点追踪（不改写页面 JS）      │  │
 │  └───────────────────────────────────────────┘  │
 │                    ↕ Playwright API               │
 ├─────────────────────────────────────────────────┤
@@ -319,6 +329,17 @@ launch_browser(
 ---
 
 ## 更新记录
+
+### v1.4.0（2026-09-03）— PropertyTracer 正确性、隔离与交互追踪
+
+- 配套正式版 `camoufox-reverse` reverse.4：75 个原路径不变，正确区分 get/set/call，并解析 native site、进程序列和微秒时间扩展字段
+- `trace_property_access` 新增兼容的 `action=start/stop/query/capture/clear/status`；可在 start 后继续执行页面操作，再 stop 聚合
+- 每次浏览器启动分配独立 trace run，控制、清理和历史查询不再影响并发 MCP 实例
+- 修复无浏览器时旧 control 文件被误报为 `installed/trace_active`；`check_environment` 现在拆分 installed、trace_capable、trace_active
+- 新窗口严格执行 off → drain → cleanup → on，避免 Windows 开放文件混入旧事件
+- 新增 kind/site 过滤、跨进程确定性排序、cap 提示及 capability 协商
+- `collect_values` 明确为追踪后的安全快照；Cookie 与可能产生副作用的 API 默认跳过
+- 官方浏览器请求 `enable_trace=True` 时不再注入无效配置或关闭 sandbox；普通启动和现有 135 路径保持不变
 
 ### v1.3.0（2026-09-02）— Camoufox 152 与无侵入多版本选择
 
@@ -358,7 +379,7 @@ launch_browser(
 > 服务及跨平台运行的兼容性。
 
 **新增工具**
-- `trace_property_access` — C++ 引擎层 DOM 属性访问追踪（JSVMP 不可检测），支持 summary/timeline/sequence/search 四种视图
+- `trace_property_access` — Gecko 原生 DOM/Web API 定点追踪，不改写页面 JS 对象；支持 summary/timeline/sequence/search 四种视图
 - `list_trace_files` — 列出本地 trace 文件
 - `query_trace_file` — 查询历史 trace 文件
 
@@ -376,7 +397,7 @@ launch_browser(
 **依赖**
 - MCP Python SDK 固定为 `mcp>=1.29,<2`；v2 迁移将在后续版本单独进行
 
-- 需要 [camoufox-reverse](https://github.com/WhiteNightShadow/camoufox-reverse) 定制版浏览器（可选，不装不影响其他 32 个工具）
+- 需要 [camoufox-reverse](https://github.com/WhiteNightShadow/camoufox-reverse) 定制版浏览器（可选，不装不影响其他工具）
 
 ### v1.0.0（2026-04-18）— 工具精简 + 回归纯 JS 逆向工具集
 

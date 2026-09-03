@@ -17,8 +17,8 @@ An MCP (Model Context Protocol) server that gives AI coding assistants (Claude C
 | Hook Persistence | Not supported | **Context-level persistence, auto re-inject after navigation** |
 
 **Core Advantages:**
-- Camoufox modifies fingerprint information at the **C++ engine level**, not JS patches — fundamentally undetectable
-- Juggler protocol sandbox isolation makes Playwright **completely undetectable** by page JS
+- Camoufox modifies fingerprint information at the **C++ engine level**, avoiding common JS descriptor/prototype patch artifacts
+- Juggler protocol isolation reduces page-world automation artifacts
 - BrowserForge generates fingerprints based on **real-world traffic distribution**
 - Works on sites with strong bot detection: RS, AK, JY, CF, etc.
 - Hooks use `Object.defineProperty` with **override protection**
@@ -187,7 +187,7 @@ For scripts over 200KB that require a full rewrite, explicitly set
 |------|-------------|
 | `verify_signer_offline` | Offline signer verification: provide samples, get char-level diff at first divergence |
 | `check_environment` | MCP/dependency checks plus Camoufox Python, active and installed-version diagnostics |
-| `reset_browser_state` | Clear residuals (hooks / capture / routes) without closing browser |
+| `reset_browser_state` | Clear residuals (hooks / capture / routes / current engine trace) without closing browser |
 
 Starting with v1.3.0, Camoufox Python 0.5+ can keep the official and reverse
 builds side by side without changing the persistent active browser:
@@ -195,7 +195,7 @@ builds side by side without changing the persistent active browser:
 ```text
 check_environment()
 launch_browser(
-  browser_version="whitenightshadow/152.0.4-beta.30-reverse.3",
+  browser_version="whitenightshadow/152.0.4-beta.30-reverse.4",
   enable_trace=True
 )
 ```
@@ -205,6 +205,34 @@ multiple assets share a version. Omitting it preserves v1.2.0 behavior,
 including Camoufox 0.4.x flat-cache installations. The selected and active
 browsers must share the exact version/build to prevent upstream resource mixing. The MCP never downloads a
 browser, changes `config.json`, or initiates cache migration.
+
+### Native PropertyTracer
+
+The reverse browser covers 75 fingerprint-relevant Gecko DOM/Web API native
+sites without rewriting page JavaScript objects, descriptors, or prototypes.
+A hit is strong evidence; a miss is not proof that an unhooked property was not
+used. High event rates can still create a timing side channel.
+
+| Tool | Description |
+|------|-------------|
+| `trace_property_access` | `action=capture/start/stop/query/clear/status`; summary/timeline/sequence/search; get/set/call, object, keyword, and native-site filters |
+| `list_trace_files` | List historical files across isolated trace-run directories |
+| `query_trace_file` | Query one PropertyTracer JSONL inside the trace cache |
+
+Each traced launch gets a private run directory, so controls and cleanup never
+touch another MCP instance. `collect_values=True` is a conservative post-trace
+snapshot, not the value at event time; sensitive and side-effectful paths are
+reported in `values_skipped`. Engine tracing temporarily disables the Firefox
+content sandbox so content processes can write the private trace; normal
+launches retain the upstream sandbox.
+
+Interactive capture:
+
+```text
+trace_property_access(action="start")
+# perform click/evaluate/navigation actions
+trace_property_access(action="stop", mode="summary")
+```
 
 ---
 
@@ -265,7 +293,7 @@ browser, changes `config.json`, or initiates cache migration.
 │           AI Coding Assistant (Cursor / Claude)  │
 │                    ↕ MCP (stdio)                 │
 ├─────────────────────────────────────────────────┤
-│           camoufox-reverse-mcp (32 tools)        │
+│              camoufox-reverse-mcp                │
 │  ┌──────────┬──────────┬──────────┬──────────┐  │
 │  │Navigation│ Script   │Debugging │ Hooking  │  │
 │  │          │ Analysis │          │          │  │
@@ -283,6 +311,17 @@ browser, changes `config.json`, or initiates cache migration.
 ---
 
 ## Changelog
+
+### v1.4.0 (2026-09-03) — Correct, Isolated, Interactive PropertyTracer
+
+- Pair with the production `camoufox-reverse` reverse.4 build while preserving all 75 Firefox 135 paths and protocol-v1 core fields
+- Decode correct get/set/call kinds plus native site, per-process sequence, and microsecond ordering extensions
+- Add backward-compatible `start/stop/query/capture/clear/status` actions so page operations can run inside an explicit trace window
+- Isolate every launch's controls, traces, values, and cleanup; reject stale controls and never operate on another MCP instance
+- Fix the Windows fresh-window order to off → drain → cleanup → on
+- Split `installed`, `trace_capable`, and `trace_active` environment status and negotiate capability metadata
+- Treat `collect_values` as a safe post-trace snapshot and skip cookies or APIs that would create side effects
+- Ignore unsupported tracing on official browsers without injecting config or disabling their sandbox; existing 135/default launches remain unchanged
 
 ### v1.3.0 (2026-09-02) — Camoufox 152 and Non-Invasive Version Selection
 

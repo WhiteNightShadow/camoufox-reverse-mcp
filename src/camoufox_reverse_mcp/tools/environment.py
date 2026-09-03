@@ -4,7 +4,7 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
-from ..server import mcp, browser_manager
+from ..server import browser_manager, mcp
 
 
 @mcp.tool()
@@ -94,30 +94,77 @@ async def check_environment() -> dict:
         and camoufox_runtime.get("active") is not None
     )
 
-    # camoufox-reverse custom browser detection
-    from ..property_trace import CACHE_DIR, CONTROL_DIR, TRACES_DIR
-    custom_browser: dict[str, Any] = {"installed": False}
+    # camoufox-reverse capability and active-session detection. Installation is
+    # derived from browser markers; control files only prove a live trace when
+    # they belong to this BrowserManager launch and their PIDs still exist.
+    from ..property_trace import (
+        CACHE_DIR,
+        CONTROL_DIR,
+        RUNS_DIR,
+        list_control_files,
+        pid_is_alive,
+    )
+    custom_browser: dict[str, Any] = {"installed": False, "trace_active": False}
     try:
-        # Check if trace control files exist (= custom browser running with trace)
-        ctrl_files = list(CONTROL_DIR.glob("control-*.cmd")) if CONTROL_DIR.exists() else []
-        trace_files = list(TRACES_DIR.glob("*.jsonl")) if TRACES_DIR.exists() else []
-        if ctrl_files:
-            custom_browser = {
-                "installed": True,
-                "trace_active": True,
-                "control_files": len(ctrl_files),
-                "trace_files": len(trace_files),
-                "cache_dir": str(CACHE_DIR),
-            }
-        else:
-            custom_browser = {
-                "installed": False,
-                "install_hint": (
-                    "Download camoufox-reverse from "
-                    "https://github.com/WhiteNightShadow/camoufox-reverse/releases "
-                    "and launch with enable_trace=True"
-                ),
-            }
+        reverse_installs = [
+            item for item in camoufox_runtime.get("installed", [])
+            if item.get("property_trace")
+        ]
+        selected = getattr(browser_manager, "_runtime_browser", None)
+        selected = selected or camoufox_runtime.get("active")
+        trace_base = getattr(browser_manager, "_trace_base_dir", None)
+        live_controls = list_control_files(trace_base, live_only=True) if trace_base else []
+        all_controls = list(CONTROL_DIR.glob("control-*.cmd")) if CONTROL_DIR.exists() else []
+        if RUNS_DIR.exists():
+            for run in RUNS_DIR.iterdir():
+                if run.is_dir():
+                    directory = run / "control"
+                    if directory.exists():
+                        all_controls.extend(directory.glob("control-*.cmd"))
+        stale_controls = []
+        for path in all_controls:
+            try:
+                pid = int(path.stem.removeprefix("control-"))
+            except ValueError:
+                stale_controls.append(path)
+                continue
+            if not pid_is_alive(pid):
+                stale_controls.append(path)
+        protocol = selected.get("property_trace_protocol") if selected else None
+        live_legacy_handshake = bool(
+            browser_manager.browser is not None
+            and trace_base
+            and live_controls
+            and selected
+            and not selected.get("capabilities_marker")
+            and not selected.get("repo")
+        )
+        trace_capable = bool(
+            selected
+            and selected.get("property_trace")
+            and (protocol is None or selected.get("property_trace_compatible"))
+        ) or live_legacy_handshake
+        custom_browser = {
+            "installed": bool(reverse_installs or live_legacy_handshake),
+            "trace_capable": trace_capable,
+            "trace_active": bool(
+                browser_manager.browser is not None and trace_base and live_controls
+            ),
+            "active_selector": selected.get("selector") if selected else None,
+            "available_selectors": [item.get("selector") for item in reverse_installs],
+            "protocol": protocol,
+            "hook_count": selected.get("property_trace_hooks") if selected else None,
+            "features": selected.get("property_trace_features", []) if selected else [],
+            "run_dir": str(trace_base) if trace_base else None,
+            "live_control_files": len(live_controls),
+            "stale_control_files": len(stale_controls),
+            "cache_dir": str(CACHE_DIR),
+        }
+        if not reverse_installs:
+            custom_browser["install_hint"] = (
+                "Install a verified camoufox-reverse release side-by-side, then "
+                "select it with browser_version and enable_trace=True."
+            )
     except Exception:
         pass
 

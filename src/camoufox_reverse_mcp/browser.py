@@ -7,7 +7,7 @@ import time
 from collections import deque
 from typing import Any
 
-from playwright.async_api import Page, BrowserContext
+from playwright.async_api import BrowserContext, Page
 
 MAX_LOG_SIZE = 2000
 MAX_BODY_SIZE = 200_000
@@ -59,6 +59,11 @@ class BrowserManager:
         self._nav_responses: list[dict] = []  # 最近一次 navigate 记录到的响应链路
         self._route_handlers: dict[str, Any] = {}  # 已注册的 route handler 映射
         self._runtime_browser: dict[str, Any] | None = None
+        self._trace_base_dir = None
+        self._trace_max_events = 100000
+        self._trace_objects: list[str] = []
+        self._trace_started_at: float | None = None
+        self._trace_action_lock = asyncio.Lock()
 
     async def launch(self, config: dict | None = None) -> dict:
         """Launch the Camoufox browser with the given or default config."""
@@ -128,29 +133,65 @@ class BrowserManager:
         headless = cfg.get("headless", False)
         kwargs["headless"] = headless
 
-        # Property trace support
-        enable_trace = cfg.get("enable_trace", False)
+        # Property trace support. Explicit official/multiversion builds fail
+        # closed without changing the normal launch or browser sandbox.
+        enable_trace = bool(cfg.get("enable_trace", False))
+        trace_warnings: list[str] = []
+        trace_base_dir = None
+        trace_runtime = runtime_browser
+        if enable_trace and trace_runtime is None:
+            try:
+                from .camoufox_runtime import inspect_camoufox_runtime
+
+                trace_runtime = inspect_camoufox_runtime().get("active")
+            except Exception:
+                trace_runtime = None
+        if enable_trace and trace_runtime is not None:
+            marker = trace_runtime.get("capabilities_marker")
+            known_official = str(trace_runtime.get("repo") or "").lower() == "official"
+            if (marker or known_official) and not trace_runtime.get("property_trace", False):
+                enable_trace = False
+                trace_warnings.append(
+                    "enable_trace was ignored because the selected browser capability "
+                    "marker does not declare PropertyTracer support."
+                )
+            elif (
+                trace_runtime.get("property_trace_protocol") is not None
+                and not trace_runtime.get("property_trace_compatible", False)
+            ):
+                enable_trace = False
+                trace_warnings.append(
+                    "enable_trace was ignored because the selected browser uses an "
+                    "unsupported PropertyTracer protocol."
+                )
 
         if enable_trace:
+            from camoufox.utils import launch_options as _cfx_launch_options
+
             from .camou_config import merge_camou_config_env
             from .property_trace import (
-                CACHE_DIR,
                 build_property_trace_config,
+                cleanup_old_runs,
                 cleanup_old_traces,
-                cleanup_traces,
-                ensure_dirs,
+                create_trace_run,
             )
-            from camoufox.utils import launch_options as _cfx_launch_options
-            ensure_dirs()
             cleanup_old_traces(keep_days=7)
-            # Clean traces and values from previous sessions
-            cleanup_traces()
-            values_dir = CACHE_DIR / "values"
-            if values_dir.exists():
-                for f in values_dir.glob("*"):
-                    try: f.unlink()
-                    except: pass
-            trace_config = build_property_trace_config()
+            cleanup_old_runs(keep_days=7)
+            trace_objects = cfg.get("trace_objects") or []
+            if not isinstance(trace_objects, list) or not all(
+                isinstance(item, str) and item.strip() for item in trace_objects
+            ):
+                raise ValueError("trace_objects must be a list of non-empty object names")
+            trace_objects = [item.strip() for item in trace_objects]
+            trace_max_events = int(cfg.get("trace_max_events", 100000))
+            if not 1 <= trace_max_events <= 200_000:
+                raise ValueError("trace_max_events must be between 1 and 200000")
+            trace_base_dir = create_trace_run()
+            trace_config = build_property_trace_config(
+                trace_base_dir,
+                objects=trace_objects,
+                max_events=trace_max_events,
+            )
 
             # Build from_options ourselves, then inject propertyTrace
             from_options = _cfx_launch_options(headless=headless, **{
@@ -167,8 +208,20 @@ class BrowserManager:
             kwargs["from_options"] = from_options
 
         self._cm = AsyncCamoufox(**kwargs)
-        self.browser = await self._cm.__aenter__()
-        self._runtime_browser = runtime_browser
+        try:
+            self.browser = await self._cm.__aenter__()
+        except Exception:
+            if trace_base_dir is not None:
+                import shutil
+
+                shutil.rmtree(trace_base_dir, ignore_errors=True)
+            self._cm = None
+            raise
+        self._runtime_browser = trace_runtime if trace_base_dir is not None else runtime_browser
+        self._trace_base_dir = trace_base_dir
+        if trace_base_dir is not None:
+            self._trace_max_events = trace_max_events
+            self._trace_objects = trace_objects
 
         ctx = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
         self.contexts["default"] = ctx
@@ -194,6 +247,23 @@ class BrowserManager:
         }
         if runtime_browser is not None:
             result["browser_runtime"] = runtime_browser
+        result["engine_trace"] = {
+            "requested": bool(cfg.get("enable_trace", False)),
+            "enabled": trace_base_dir is not None,
+            "run_dir": str(trace_base_dir) if trace_base_dir is not None else None,
+            "objects": self._trace_objects if trace_base_dir is not None else [],
+            "max_events_per_process": (
+                self._trace_max_events if trace_base_dir is not None else None
+            ),
+        }
+        if trace_base_dir is not None:
+            trace_warnings.append(
+                "Engine trace temporarily disables the Firefox content sandbox so "
+                "content processes can write the private trace run; use it only for "
+                "short analysis sessions."
+            )
+        if trace_warnings:
+            result["warnings"] = trace_warnings
         return result
 
     async def _connect(self, ws_endpoint: str) -> dict:
@@ -418,6 +488,21 @@ class BrowserManager:
         Attach mode (connected to an external server): only disconnects the local
         Playwright client — the user's browser and server are left running.
         """
+        trace_base_dir = self._trace_base_dir
+        if trace_base_dir is not None:
+            try:
+                from .property_trace import set_trace_state
+
+                await set_trace_state(
+                    "off",
+                    trace_base_dir,
+                    features=(self._runtime_browser or {}).get(
+                        "property_trace_features", []
+                    ),
+                    timeout=2.0,
+                )
+            except Exception:
+                pass
         if self._connected and self._pw is not None:
             # Disconnect without closing the remote browser: stopping the driver
             # tears down the client transport but leaves the external server alive.
@@ -430,6 +515,14 @@ class BrowserManager:
                 await self._cm.__aexit__(None, None, None)
             except Exception:
                 pass
+        stale_controls_removed = 0
+        if trace_base_dir is not None:
+            try:
+                from .property_trace import cleanup_stale_controls
+
+                stale_controls_removed = cleanup_stale_controls(trace_base_dir)
+            except Exception:
+                pass
         self.browser = None
         self.contexts.clear()
         self.pages.clear()
@@ -438,6 +531,10 @@ class BrowserManager:
         self._pw = None
         self._connected = False
         self._runtime_browser = None
+        self._trace_base_dir = None
+        self._trace_max_events = 100000
+        self._trace_objects = []
+        self._trace_started_at = None
         self._console_logs.clear()
         self._network_requests.clear()
         self._request_id_counter = 0
@@ -448,4 +545,7 @@ class BrowserManager:
         self._persistent_traces.clear()
         self._nav_responses.clear()
         self._route_handlers.clear()
-        return {"status": "closed"}
+        return {
+            "status": "closed",
+            "stale_trace_controls_removed": stale_controls_removed,
+        }
