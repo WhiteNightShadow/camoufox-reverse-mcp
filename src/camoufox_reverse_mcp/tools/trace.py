@@ -84,7 +84,8 @@ async def _trace_property_access_impl(
             (useful when you want to capture navigate() events).
         mode: Aggregation view type:
             - "summary" (default): Property access frequency ranking.
-              Best for deciding which properties to patch in env emulation.
+              Best for prioritizing investigation and candidate environment
+              patches; use compare_env/dynamic validation to confirm scope.
             - "timeline": Time-bucketed view showing when properties are first accessed.
             - "sequence": Raw event sequence with timestamps.
             - "search": Same as sequence but filtered by search_query.

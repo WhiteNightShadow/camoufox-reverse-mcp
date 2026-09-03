@@ -275,9 +275,9 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
      browser_version="whitenightshadow/152.0.4-beta.30-reverse.4",
      enable_trace=True
    )                                           ← 显式启动定制版
-2. navigate("https://www.douyin.com/video/xxx") ← JSVMP 执行，事件自动记录
-3. trace_property_access(action="start")       ← 立即返回
-4. # 执行 click/evaluate 等目标操作
+2. trace_property_access(action="start")       ← 清空旧窗口并立即返回
+3. navigate("https://www.douyin.com/video/xxx") ← 在新窗口内触发 JSVMP
+4. # 继续执行 click/evaluate 等目标操作
 5. trace_property_access(action="stop", mode="summary", collect_values=True)
    → 返回覆盖范围内命中的属性、频次、get/set/call、进程与 native site
    → snapshot_values 是操作后的安全快照；Cookie、Canvas、WebGL、Audio 等
@@ -296,8 +296,10 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
 **与 compare_env 的区别**：
 - `trace_property_access`：对 75 个 Gecko 原生注入点提供强证据；未命中不能证明
   覆盖范围外的属性未被读取，也可能有高负载时间侧信道
-- `compare_env`：采集浏览器**所有**环境属性（全量，JS 层）
-- 路径 B 环境伪装时，用 trace 结果决定"补哪些属性"，避免补多了引入新泄露点
+- `compare_env`：采集一组 JS 层环境基线；可通过 `properties` 或分批
+  `evaluate_js` 扩展，不能视为全量枚举
+- 路径 B 环境伪装时，用 trace 命中确定优先调查/补齐对象，再结合
+  `compare_env` 与动态验证确认完整范围，避免把 75 点之外的未命中误作否定证据
 
 ---
 
