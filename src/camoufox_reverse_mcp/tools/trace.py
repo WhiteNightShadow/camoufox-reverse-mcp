@@ -145,6 +145,8 @@ async def _trace_property_access_impl(
     if action == "status":
         files = list_session_files(base_dir=trace_base)
         enabled_controls = 0
+        acknowledged_pids: list[int] = []
+        unacknowledged_pids: list[int] = []
         error_pids: list[int] = []
         data_loss_pids: list[int] = []
         use_ack = "control_ack" in set(runtime.get("property_trace_features", []))
@@ -154,6 +156,10 @@ async def _trace_property_access_impl(
                 if use_ack:
                     status = read_control_status(pid, trace_base)
                     enabled_controls += bool(status and status[0] == "on")
+                    if status and status[0] in {"on", "off"}:
+                        acknowledged_pids.append(pid)
+                    else:
+                        unacknowledged_pids.append(pid)
                     if status and status[0] == "error":
                         error_pids.append(pid)
                     if status and len(status) > 2 and status[2] == "write_error":
@@ -171,7 +177,10 @@ async def _trace_property_access_impl(
             "enabled_processes": enabled_controls,
             "error_processes": error_pids,
             "data_loss_processes": data_loss_pids,
-            "acknowledged": use_ack,
+            "ack_supported": use_ack,
+            "acknowledged": bool(controls) and use_ack and not unacknowledged_pids,
+            "acknowledged_processes": len(acknowledged_pids),
+            "unacknowledged_processes": sorted(unacknowledged_pids),
         }
 
     async def set_control_state(state: str) -> dict:
@@ -565,6 +574,7 @@ async def query_trace_file(
     input_truncated = bool(
         len(events) >= MAX_LOADED_EVENTS or file_size > MAX_LOADED_BYTES
     )
+    raw_total = len(events)
     events = filter_events(
         events, filter_object, search_query, filter_kind, filter_site
     )
@@ -583,6 +593,18 @@ async def query_trace_file(
     result["input_truncated"] = input_truncated
     result["loaded_event_limit"] = MAX_LOADED_EVENTS
     result["loaded_byte_limit"] = MAX_LOADED_BYTES
+    result["raw_total_events"] = raw_total
+    result["filtered_total_events"] = len(events)
+    result["possibly_capped"] = None
+    result["cap_known"] = False
+    result["coverage"] = {
+        "scope": "fingerprint-native",
+        "hook_count": 75,
+        "protocol": 1,
+        "features": [],
+        "negative_result_is_conclusive": False,
+        "source": "historical_file",
+    }
     return result
 
 
