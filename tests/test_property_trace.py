@@ -137,6 +137,25 @@ def test_cleanup_only_removes_selected_run(monkeypatch, tmp_path):
     assert two_file.exists()
 
 
+def test_cleanup_old_traces_never_deletes_from_a_live_run(monkeypatch, tmp_path):
+    _configure_cache(monkeypatch, tmp_path)
+    live_run = property_trace.create_trace_run()
+    expired_run = property_trace.create_trace_run()
+    live_file = property_trace.traces_dir(live_run) / f"{os.getpid()}_0.jsonl"
+    expired_file = property_trace.traces_dir(expired_run) / "99999999_0.jsonl"
+    live_file.write_text("{}\n", encoding="utf-8")
+    expired_file.write_text("{}\n", encoding="utf-8")
+    os.utime(live_file, (1, 1))
+    os.utime(expired_file, (1, 1))
+    property_trace.control_path_for(os.getpid(), live_run).write_text(
+        "on", encoding="utf-8"
+    )
+
+    assert property_trace.cleanup_old_traces(keep_days=7) == 1
+    assert live_file.exists()
+    assert not expired_file.exists()
+
+
 @pytest.mark.asyncio
 async def test_trace_tool_start_stop_is_run_scoped(monkeypatch, tmp_path):
     _configure_cache(monkeypatch, tmp_path)

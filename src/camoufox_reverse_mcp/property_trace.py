@@ -436,7 +436,16 @@ def _event_ms(event: dict) -> int:
 def cleanup_old_traces(keep_days: int = 7) -> int:
     cutoff = time.time() - keep_days * 86400
     count = 0
+    live_runs: dict[Path, bool] = {}
     for f in list_session_files(include_all_runs=True):
+        # A long-running or paused MCP instance may legitimately retain an old
+        # trace file. Never let a different launch's housekeeping delete data
+        # from a run that still has a live native control process.
+        run = f.parent.parent
+        if run not in live_runs:
+            live_runs[run] = bool(list_control_files(run, live_only=True))
+        if live_runs[run]:
+            continue
         try:
             if f.stat().st_mtime < cutoff:
                 f.unlink()
