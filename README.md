@@ -339,7 +339,8 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
 - 新窗口严格执行 off → drain → cleanup → on，避免 Windows 开放文件混入旧事件
 - 新增 kind/site 过滤、跨进程确定性排序、cap 提示及 capability 协商
 - `collect_values` 明确为追踪后的安全快照；Cookie 与可能产生副作用的 API 默认跳过
-- 官方浏览器请求 `enable_trace=True` 时不再注入无效配置或关闭 sandbox；普通启动和现有 135 路径保持不变
+- 可由 Camoufox 0.5 元数据识别的官方浏览器请求 `enable_trace=True` 时，不再注入无效配置或关闭 sandbox；普通启动保持不变
+- Camoufox 0.4 的官方 135 与早期无 marker 的定制 135 无法在启动前区分；为兼容旧定制版，显式请求 Trace 时仍尝试旧握手，默认 `enable_trace=False` 不受影响
 
 ### v1.3.0（2026-09-02）— Camoufox 152 与无侵入多版本选择
 

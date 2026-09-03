@@ -321,7 +321,8 @@ trace_property_access(action="stop", mode="summary")
 - Fix the Windows fresh-window order to off → drain → cleanup → on
 - Split `installed`, `trace_capable`, and `trace_active` environment status and negotiate capability metadata
 - Treat `collect_values` as a safe post-trace snapshot and skip cookies or APIs that would create side effects
-- Ignore unsupported tracing on official browsers without injecting config or disabling their sandbox; existing 135/default launches remain unchanged
+- Ignore unsupported tracing on official browsers identified by Camoufox 0.5 metadata without injecting config or disabling their sandbox; default launches remain unchanged
+- Camoufox 0.4 official 135 and early markerless custom 135 builds are indistinguishable before launch; explicit tracing still attempts the legacy handshake for compatibility, while the default `enable_trace=False` path is unaffected
 
 ### v1.3.0 (2026-09-02) — Camoufox 152 and Non-Invasive Version Selection
 
