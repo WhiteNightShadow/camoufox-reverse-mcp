@@ -339,7 +339,8 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
   两点迁移到 Firefox 152 默认 LSNG `LSObject` 路径
 - PropertyTracer 扩为 77 点、protocol 1 不变，事件 object/property/kind 与
   MCP 聚合行为不变；LSObject 与 partitioned 路径由 native site 区分
-- MCP 解析器无需行为改动；默认 Trace-off、135/reverse.3/reverse.4 兼容路径不变
+- 实时事件解析与聚合无需行为改动；默认 Trace-off、135/reverse.3/reverse.4
+  兼容路径不变。历史 JSONL 无构建 marker，查询时 `hook_count` 改为明确未知
 
 ### v1.4.0（2026-09-03）— PropertyTracer 正确性、隔离与交互追踪
 

@@ -320,8 +320,9 @@ trace_property_access(action="stop", mode="summary")
 - Expand the build-declared set to 77 sites while keeping protocol 1 and event
   object/property/kind fields unchanged; native sites distinguish LSObject and
   the separately reachable partitioned implementation
-- No parser behavior changes; trace-off and 135/reverse.3/reverse.4 compatibility
-  remain unchanged
+- Live parsing and aggregation remain unchanged, as do trace-off and
+  135/reverse.3/reverse.4 compatibility. Historical JSONL has no build marker,
+  so its hook count is now explicitly unknown instead of assumed to be 75
 
 ### v1.4.0 (2026-09-03) — Correct, Isolated, Interactive PropertyTracer
 
