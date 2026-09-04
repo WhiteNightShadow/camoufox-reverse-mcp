@@ -6,6 +6,7 @@ import json as _json
 import os
 
 from ..server import browser_manager, mcp
+from ..utils.frames import list_frame_metadata
 
 _PRE_INJECT_REGISTER_TIMEOUT = 10.0
 
@@ -411,7 +412,7 @@ async def wait_for(
 
 @mcp.tool()
 async def get_page_info() -> dict:
-    """Get current page URL, title, and viewport size."""
+    """Get page metadata plus a zero-based frame list for targeted tools."""
     try:
         page = await browser_manager.get_active_page()
         viewport = page.viewport_size or {}
@@ -419,6 +420,7 @@ async def get_page_info() -> dict:
             "url": page.url, "title": await page.title(),
             "viewport_width": viewport.get("width"),
             "viewport_height": viewport.get("height"),
+            "frames": list_frame_metadata(page),
         }
     except Exception as e:
         return {"error": str(e)}

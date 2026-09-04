@@ -119,12 +119,12 @@ pip install -e .
 | `take_snapshot` | 获取页面无障碍树（token 高效） |
 | `click` / `type_text` | 点击元素 / 输入文本 |
 | `wait_for` | 等待元素出现或 URL 匹配 |
-| `get_page_info` | 获取当前页面 URL、标题、视口尺寸 |
+| `get_page_info` | 获取当前页面 URL、标题、视口尺寸和 Frame 清单 |
 
 ### JS 执行与调试
 | 工具 | 说明 |
 |------|------|
-| `evaluate_js` | 在页面上下文执行任意 JS 表达式（多策略 JSON 解析） |
+| `evaluate_js` | 执行 JS 表达式；默认隔离上下文，可显式选择主世界和目标 Frame |
 
 ### 脚本分析
 | 工具 | 说明 |
@@ -135,7 +135,8 @@ pip install -e .
 ### Hook 与追踪
 | 工具 | 说明 |
 |------|------|
-| `hook_function` | Hook 或追踪函数：`mode="intercept"` 注入代码 / `mode="trace"` 非侵入式追踪 |
+| `hook_function` | Hook 或追踪函数；支持主世界、Frame、持久化和动态目标等待 |
+| `get_trace_data` | 读取/清理函数 Trace，按 world 与 Frame 过滤 |
 | `inject_hook_preset` | 一键注入预置 Hook（xhr / fetch / crypto / websocket / debugger_bypass / cookie / runtime_probe） |
 | `remove_hooks` | 移除所有 Hook 并恢复原始对象 |
 | `get_console_logs` | 获取页面 console 输出 |
@@ -231,8 +232,8 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
 6. list_network_requests(method="POST")
 7. get_request_initiator(request_id=3)     ← 定位签名函数
 8. search_code("sign")                     ← 搜索签名代码
-9. hook_function("window.getSign", mode="trace")
-10. reload() → get_console_logs()          ← 收集追踪数据
+9. hook_function("window.getSign", mode="trace", world="main", persistent=True)
+10. reload() → get_trace_data("window.getSign", world="main") ← 收集追踪数据
 ```
 
 ### 场景 2：通用 JSVMP 逆向（RS / AK / 自研 VMP）
@@ -332,6 +333,14 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
 ---
 
 ## 更新记录
+
+### v1.5.0（2026-09-04）— 主世界、Frame 与可靠持久 Hook
+
+- `evaluate_js/hook_function` 新增显式 `world="main"`，默认隔离上下文保持不变；Camoufox 原生 `mw:` 优先，旧版可安全回退
+- 增加 Frame 清单与 `frame_url/frame_name/frame_index`，多匹配和不稳定持久索引明确拒绝
+- 持久 Hook 增加有界等待和通用赋值监听，可捕获动态函数首次调用；缺失目标返回 `pending/target_not_found`，不再假报成功
+- 恢复 `get_trace_data`，Trace 缓存按 world/Frame 隔离且有界；修复 intercept 忽略 `persistent` 的问题
+- Firefox 135、官方 152、reverse.5 及真实 FeiLin 页面验证通过，无需重新编译浏览器
 
 ### v1.4.1（2026-09-03）— Firefox 152 LocalStorage 追踪路径对齐
 

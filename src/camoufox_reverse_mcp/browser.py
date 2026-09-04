@@ -11,6 +11,9 @@ from playwright.async_api import BrowserContext, Page
 
 MAX_LOG_SIZE = 2000
 MAX_BODY_SIZE = 200_000
+MAX_TRACE_PATHS = 128
+MAX_TRACE_EVENTS = 2000
+MAX_TRACE_MESSAGE_SIZE = 32_000
 
 
 def detect_host_os() -> str:
@@ -55,7 +58,8 @@ class BrowserManager:
         self._capture_body = False
         self._init_scripts: list[str] = []
         self._persistent_scripts: list[dict] = []
-        self._persistent_traces: dict[str, list] = {}
+        self._persistent_traces: dict[str, deque[dict]] = {}
+        self._persistent_trace_order: deque[tuple[str, dict]] = deque()
         self._nav_responses: list[dict] = []  # 最近一次 navigate 记录到的响应链路
         self._route_handlers: dict[str, Any] = {}  # 已注册的 route handler 映射
         self._runtime_browser: dict[str, Any] | None = None
@@ -106,6 +110,26 @@ class BrowserManager:
 
             overrides, runtime_browser = launch_overrides(str(browser_version))
             kwargs.update(overrides)
+
+        # Camoufox 0.4.5+ exposes an opt-in ``mw:`` Playwright evaluate prefix.
+        # Keep the declared 0.4.0 dependency usable by feature-detecting the
+        # launch option; older builds use the explicit wrappedJSObject fallback.
+        main_world_eval_supported = False
+        try:
+            import inspect
+
+            from camoufox.utils import launch_options as _capability_launch_options
+
+            main_world_eval_supported = (
+                "main_world_eval"
+                in inspect.signature(_capability_launch_options).parameters
+            )
+        except Exception:
+            pass
+        if main_world_eval_supported:
+            # Opening the channel does not change ordinary evaluate() semantics;
+            # each tool must still explicitly request world="main".
+            kwargs["main_world_eval"] = True
 
         if cfg.get("proxy"):
             kwargs["proxy"] = cfg["proxy"]
@@ -244,6 +268,7 @@ class BrowserManager:
             "os": os_type,
             "locale": locale,
             "pages": list(self.pages.keys()),
+            "main_world_eval": main_world_eval_supported,
         }
         if runtime_browser is not None:
             result["browser_runtime"] = runtime_browser
@@ -375,9 +400,41 @@ class BrowserManager:
         if text and text.startswith("__MCP_TRACE__:"):
             try:
                 import json
+
+                if len(text) > MAX_TRACE_MESSAGE_SIZE:
+                    return
                 payload = json.loads(text[len("__MCP_TRACE__:"):])
                 path = payload.pop("__path__", "unknown")
-                self._persistent_traces.setdefault(path, []).append(payload)
+                if (
+                    not isinstance(payload, dict)
+                    or not isinstance(path, str)
+                    or not path
+                    or len(path) > 512
+                ):
+                    return
+                if path not in self._persistent_traces:
+                    if len(self._persistent_traces) >= MAX_TRACE_PATHS:
+                        oldest_path = next(iter(self._persistent_traces))
+                        self._persistent_traces.pop(oldest_path, None)
+                        self._persistent_trace_order = deque(
+                            (saved_path, entry)
+                            for saved_path, entry in self._persistent_trace_order
+                            if saved_path != oldest_path
+                        )
+                    self._persistent_traces[path] = deque()
+                else:
+                    # Keep active paths at the end so path-cap eviction is LRU-like.
+                    cache = self._persistent_traces.pop(path)
+                    self._persistent_traces[path] = cache
+                self._persistent_traces[path].append(payload)
+                self._persistent_trace_order.append((path, payload))
+                while len(self._persistent_trace_order) > MAX_TRACE_EVENTS:
+                    old_path, old_entry = self._persistent_trace_order.popleft()
+                    cache = self._persistent_traces.get(old_path)
+                    if cache and cache[0] is old_entry:
+                        cache.popleft()
+                        if not cache:
+                            self._persistent_traces.pop(old_path, None)
             except Exception:
                 pass
             return
@@ -543,6 +600,7 @@ class BrowserManager:
         self._init_scripts.clear()
         self._persistent_scripts.clear()
         self._persistent_traces.clear()
+        self._persistent_trace_order.clear()
         self._nav_responses.clear()
         self._route_handlers.clear()
         return {

@@ -27,7 +27,7 @@ browser_manager = BrowserManager()
 from .tools import navigation      # noqa: E402, F401  — browser control + page interaction
 from .tools import script_analysis  # noqa: E402, F401  — scripts() + search_code()
 from .tools import debugging        # noqa: E402, F401  — evaluate_js
-from .tools import hooking          # noqa: E402, F401  — hook_function + inject_hook_preset + remove_hooks
+from .tools import hooking          # noqa: E402, F401  — hook_function + get_trace_data + hook lifecycle
 from .tools import network          # noqa: E402, F401  — network_capture + list/get requests
 from .tools import storage          # noqa: E402, F401  — cookies() + get_storage + export/import state
 from .tools import jsvmp            # noqa: E402, F401  — hook_jsvmp_interpreter + compare_env

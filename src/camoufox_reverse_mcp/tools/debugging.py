@@ -1,6 +1,54 @@
 from __future__ import annotations
 
 from ..server import mcp, browser_manager
+from ..utils.frames import resolve_frame
+from ..utils.worlds import evaluate_in_world
+
+
+def _build_evaluate_script(expression: str, await_promise: bool, world: str) -> str:
+    """Build one self-contained evaluator for the selected Firefox world."""
+    if world not in {"isolated", "main"}:
+        raise ValueError("world must be 'isolated' or 'main'")
+
+    invocation = (
+        f"await (async () => {{ return {expression}; }})()"
+        if await_promise
+        else f"(() => {{ return {expression}; }})()"
+    )
+    body = f"""
+        try {{
+            const r = {invocation};
+            const t = typeof r;
+            if (r === undefined || r === null) {{
+                return {{ result: null, type: t, is_undefined: r === undefined }};
+            }}
+            if (t === 'symbol') {{
+                return {{ result: null, type: 'symbol', symbol_desc: r.toString() }};
+            }}
+            if (t === 'bigint') {{
+                return {{ result: r.toString(), type: 'bigint' }};
+            }}
+            if (t === 'number' && (!Number.isFinite(r) || Object.is(r, -0))) {{
+                const special = Number.isNaN(r) ? 'NaN'
+                    : r === Infinity ? 'Infinity'
+                    : r === -Infinity ? '-Infinity' : '-0';
+                return {{ result: special, type: 'number', number_special: special }};
+            }}
+            if (t === 'object' || t === 'function') {{
+                try {{
+                    return {{ result: JSON.parse(JSON.stringify(r)), type: t }};
+                }} catch(e) {{
+                    return {{ result: String(r), type: t, serialization_warning: e.message }};
+                }}
+            }}
+            return {{ result: r, type: t }};
+        }} catch(e) {{
+            return {{ error: e && e.message ? e.message : String(e), type: 'error' }};
+        }}
+    """
+
+    prefix = "async " if await_promise else ""
+    return f"{prefix}() => {{{body}}}"
 
 
 def _build_error_response(error_msg: str) -> dict:
@@ -44,7 +92,14 @@ def _build_error_response(error_msg: str) -> dict:
 
 
 @mcp.tool()
-async def evaluate_js(expression: str, await_promise: bool = True) -> dict:
+async def evaluate_js(
+    expression: str,
+    await_promise: bool = True,
+    world: str = "isolated",
+    frame_url: str | None = None,
+    frame_name: str | None = None,
+    frame_index: int | None = None,
+) -> dict:
     """Execute an arbitrary JavaScript expression in the page context and return the result.
 
     v1.0.1 fix: correctly handles undefined/null/void/Symbol return values
@@ -59,17 +114,51 @@ async def evaluate_js(expression: str, await_promise: bool = True) -> dict:
             top-level var/let/const/function declarations (Playwright limitation).
             Wrap in IIFE if needed: (() => { var x = 1; return x; })()
         await_promise: If True, awaits Promise results (default True).
+        world: "isolated" preserves the existing Playwright execution context.
+            "main" prefers Camoufox's native ``mw:`` channel so page globals
+            created by site scripts are visible, with an explicit Firefox
+            window.wrappedJSObject.eval fallback for older/attached servers.
+        frame_url: Optional exact frame URL or shell-style wildcard.
+        frame_name: Optional exact frame name or shell-style wildcard.
+        frame_index: Optional zero-based index from get_page_info().frames.
 
     Returns:
         dict with keys:
           value       - cleaned value (parsed JSON if applicable)
           value_raw   - raw string before cleaning (only when cleaning applied)
           type        - "primitive" | "json" | "handle_fallback" | "error"
+          world       - selected execution world
+          frame       - selected frame's current snapshot metadata
+          execution_backend - isolated, Camoufox native, or wrappedJSObject
           warnings    - list of applied cleanups, if any
           hint        - (error only) friendly fix suggestion or None
     """
     import json as _json
     import re as _re
+
+    execution_backend: str | None = None
+    execution_warning: str | None = None
+    frame_info: dict | None = None
+    js_value_type: str | None = None
+    number_special_value: str | None = None
+
+    def _decorate(response: dict) -> dict:
+        response["world"] = world
+        if frame_info is not None:
+            response["frame"] = frame_info
+        if execution_backend is not None:
+            response["execution_backend"] = execution_backend
+        if js_value_type is not None:
+            response["js_type"] = js_value_type
+        if number_special_value is not None:
+            response["number_special"] = number_special_value
+        if execution_warning:
+            warnings = response.get("warnings")
+            if warnings is None:
+                response["warnings"] = [execution_warning]
+            elif execution_warning not in warnings:
+                warnings.append(execution_warning)
+        return response
 
     def _clean_str(s: str) -> tuple[str, list[str]]:
         warns: list[str] = []
@@ -124,63 +213,31 @@ async def evaluate_js(expression: str, await_promise: bool = True) -> dict:
 
     try:
         page = await browser_manager.get_active_page()
+        target, frame_info = resolve_frame(
+            page,
+            frame_url=frame_url,
+            frame_name=frame_name,
+            frame_index=frame_index,
+        )
         try:
             # v1.0.1 fix (Bug 5): Handle undefined/null/Symbol without JSON.parse crash.
             # Previous code did JSON.parse(JSON.stringify(r)) inside JS, which throws
             # when r is undefined/Symbol (JSON.stringify returns undefined, not a string).
             # New approach: check typeof first, only JSON-roundtrip for object/array.
-            if await_promise:
-                raw = await page.evaluate(f"""async () => {{
-                    try {{
-                        const r = await (async () => {{ return {expression}; }})();
-                        const t = typeof r;
-                        if (r === undefined || r === null) {{
-                            return {{ result: null, type: t, is_undefined: r === undefined }};
-                        }}
-                        if (t === 'symbol') {{
-                            return {{ result: null, type: 'symbol', symbol_desc: r.toString() }};
-                        }}
-                        if (t === 'object' || t === 'function') {{
-                            try {{
-                                return {{ result: JSON.parse(JSON.stringify(r)), type: t }};
-                            }} catch(e) {{
-                                return {{ result: String(r), type: t, serialization_warning: e.message }};
-                            }}
-                        }}
-                        return {{ result: r, type: t }};
-                    }} catch(e) {{
-                        return {{ error: e.message, type: 'error' }};
-                    }}
-                }}""")
-            else:
-                raw = await page.evaluate(f"""() => {{
-                    try {{
-                        const r = (() => {{ return {expression}; }})();
-                        const t = typeof r;
-                        if (r === undefined || r === null) {{
-                            return {{ result: null, type: t, is_undefined: r === undefined }};
-                        }}
-                        if (t === 'symbol') {{
-                            return {{ result: null, type: 'symbol', symbol_desc: r.toString() }};
-                        }}
-                        if (t === 'object' || t === 'function') {{
-                            try {{
-                                return {{ result: JSON.parse(JSON.stringify(r)), type: t }};
-                            }} catch(e) {{
-                                return {{ result: String(r), type: t, serialization_warning: e.message }};
-                            }}
-                        }}
-                        return {{ result: r, type: t }};
-                    }} catch(e) {{
-                        return {{ error: e.message, type: 'error' }};
-                    }}
-                }}""")
+            raw, execution_backend, execution_warning = await evaluate_in_world(
+                target,
+                _build_evaluate_script(expression, await_promise, world),
+                world,
+            )
         except Exception as e:
             msg = str(e)
             low = msg.lower()
-            if any(kw in low for kw in ("unexpected", "serialize", "cloneable", "circular", "cyclic")):
+            if world == "isolated" and any(
+                kw in low
+                for kw in ("unexpected", "serialize", "cloneable", "circular", "cyclic")
+            ):
                 try:
-                    handle = await page.evaluate_handle(expression)
+                    handle = await target.evaluate_handle(expression)
                     descr = await handle.evaluate(
                         "obj => ({"
                         "  type: typeof obj,"
@@ -198,24 +255,38 @@ async def evaluate_js(expression: str, await_promise: bool = True) -> dict:
                         await handle.dispose()
                     except Exception:
                         pass
-                    return {
+                    return _decorate({
                         "type": "handle_fallback",
                         "value": descr,
                         "warnings": [f"direct evaluate failed, used handle fallback: {msg[:200]}"],
-                    }
+                    })
                 except Exception as e2:
-                    return _build_error_response(f"both paths failed: {msg[:200]} / {e2}")
+                    return _decorate(
+                        _build_error_response(f"both paths failed: {msg[:200]} / {e2}")
+                    )
             raise
 
         if isinstance(raw, dict) and "error" in raw:
-            return _build_error_response(raw["error"])
+            return _decorate(_build_error_response(raw["error"]))
 
         # ★ Bug 5 core fix: handle None (undefined/null) from JS side ★
         # The JS wrapper now explicitly returns {result: null, type: "undefined"/"object"}
         # for undefined/null values instead of crashing on JSON.parse(JSON.stringify(undefined))
         result_val = raw.get("result") if isinstance(raw, dict) else raw
         js_type = raw.get("type") if isinstance(raw, dict) else None
+        js_value_type = js_type
         warnings_list: list[str] = []
+
+        number_special = raw.get("number_special") if isinstance(raw, dict) else None
+        number_special_value = number_special
+        if js_type == "bigint":
+            warnings_list.append(
+                "BigInt is returned as a decimal string to preserve JSON/client precision."
+            )
+        if number_special:
+            warnings_list.append(
+                f"JavaScript {number_special} is returned as a string for strict JSON compatibility."
+            )
 
         # Check serialization warning from JS side
         ser_warn = raw.get("serialization_warning") if isinstance(raw, dict) else None
@@ -227,7 +298,7 @@ async def evaluate_js(expression: str, await_promise: bool = True) -> dict:
             is_undef = raw.get("is_undefined") if isinstance(raw, dict) else False
             symbol_desc = raw.get("symbol_desc") if isinstance(raw, dict) else None
             if symbol_desc:
-                return {
+                return _decorate({
                     "type": "primitive",
                     "value": None,
                     "value_raw": symbol_desc,
@@ -235,9 +306,9 @@ async def evaluate_js(expression: str, await_promise: bool = True) -> dict:
                         f"Expression returned a Symbol ({symbol_desc}). "
                         "Symbols are not JSON-serializable; value is None."
                     ],
-                }
+                })
             if is_undef or js_type == "undefined":
-                return {
+                return _decorate({
                     "type": "primitive",
                     "value": None,
                     "value_raw": "undefined",
@@ -246,37 +317,37 @@ async def evaluate_js(expression: str, await_promise: bool = True) -> dict:
                         "wrap logic in IIFE with explicit return: "
                         "(() => { /* logic */; return <your_value>; })()"
                     ],
-                }
+                })
             # null
-            return {
+            return _decorate({
                 "type": "primitive",
                 "value": None,
                 "value_raw": None,
                 "warnings": None,
-            }
+            })
 
         if isinstance(result_val, str):
             cleaned, w = _clean_str(result_val)
             warnings_list.extend(w)
             parsed, parse_err = _parse_smart(cleaned, warnings_list)
             if parse_err is None and parsed is not cleaned:
-                return {
+                return _decorate({
                     "type": "json", "value": parsed,
                     "value_raw": result_val if warnings_list else None,
                     "warnings": warnings_list if warnings_list else None,
-                }
+                })
             if parse_err is not None:
                 warnings_list.append(parse_err)
-            return {
+            return _decorate({
                 "type": "primitive", "value": cleaned,
                 "value_raw": result_val if warnings_list else None,
                 "warnings": warnings_list if warnings_list else None,
-            }
+            })
 
-        return {
+        return _decorate({
             "type": "primitive" if not isinstance(result_val, (dict, list)) else "json",
             "value": result_val,
             "warnings": warnings_list if warnings_list else None,
-        }
+        })
     except Exception as e:
-        return _build_error_response(str(e))
+        return _decorate(_build_error_response(str(e)))

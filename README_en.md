@@ -107,7 +107,7 @@ pip install -e .
 
 ---
 
-## Available Tools (35)
+## Available Tools (36)
 
 ### Browser Control
 | Tool | Description |
@@ -120,12 +120,12 @@ pip install -e .
 | `take_snapshot` | Get accessibility tree (token-efficient) |
 | `click` / `type_text` | Click element / type text |
 | `wait_for` | Wait for element or URL pattern |
-| `get_page_info` | Get current page URL, title, viewport |
+| `get_page_info` | Get current page URL, title, viewport, and frame list |
 
 ### JS Execution & Debugging
 | Tool | Description |
 |------|-------------|
-| `evaluate_js` | Execute arbitrary JS in page context (multi-strategy JSON parsing) |
+| `evaluate_js` | Evaluate JS in the compatible isolated world or an explicit page main world/frame |
 
 ### Script Analysis
 | Tool | Description |
@@ -136,7 +136,8 @@ pip install -e .
 ### Hooking & Tracing
 | Tool | Description |
 |------|-------------|
-| `hook_function` | Hook or trace a function: `mode="intercept"` for custom code / `mode="trace"` for non-invasive tracing |
+| `hook_function` | Hook or trace a function with main-world, frame, persistence, and late-target support |
+| `get_trace_data` | Read or clear function traces filtered by world and frame |
 | `inject_hook_preset` | One-click preset hooks (xhr / fetch / crypto / websocket / debugger_bypass / cookie / runtime_probe) |
 | `remove_hooks` | Remove all hooks and restore original objects |
 | `get_console_logs` | Get page console output |
@@ -249,8 +250,8 @@ trace_property_access(action="stop", mode="summary")
 6. list_network_requests(method="POST")
 7. get_request_initiator(request_id=3)     ← Find signing function
 8. search_code("sign")                     ← Search signing code
-9. hook_function("window.getSign", mode="trace")
-10. reload() → get_console_logs()          ← Collect trace data
+9. hook_function("window.getSign", mode="trace", world="main", persistent=True)
+10. reload() → get_trace_data("window.getSign", world="main") ← Collect trace data
 ```
 
 ### Scenario 2: Universal JSVMP Reverse (RS / AK / Custom VMP)
@@ -311,6 +312,14 @@ trace_property_access(action="stop", mode="summary")
 ---
 
 ## Changelog
+
+### v1.5.0 (2026-09-04) — Main World, Frames, and Reliable Persistent Hooks
+
+- Add explicit `world="main"` to `evaluate_js` and `hook_function` while preserving the isolated-world default
+- Add frame metadata and `frame_url/frame_name/frame_index` targeting with explicit ambiguity errors
+- Add bounded waiting and assignment watching for late-bound functions, including same-task first calls
+- Restore `get_trace_data` with bounded, world/frame-scoped caches and fix persistent intercept registration
+- Validate on Firefox 135, official Camoufox 152, reverse.5, and the real FeiLin reproduction without rebuilding the browser
 
 ### v1.4.1 (2026-09-03) — Firefox 152 LocalStorage Trace Path
 
