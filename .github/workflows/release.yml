@@ -30,29 +30,66 @@ jobs:
         run: |
           version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml)
           tag="v${version}"
-          title=$(git tag -l "$tag" --format='%(contents:subject)')
-          notes_file="docs/releases/${tag}.md"
+          notes_source="docs/releases/${tag}.md"
+          notes_file="$RUNNER_TEMP/release-notes-${tag}.md"
           if ! git rev-parse --verify "refs/tags/${tag}^{commit}" >/dev/null 2>&1; then
             echo "No ${tag} tag exists; skipping release."
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          if [[ ! -f "$notes_source" ]]; then
+            echo "Missing required Chinese release notes: ${notes_source}." >&2
+            exit 1
+          fi
+          python - "$notes_source" <<'PY'
+          import pathlib
+          import sys
+
+          text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+          if not text.startswith("## 版本说明\n"):
+              raise SystemExit("release notes must start with: ## 版本说明")
+          if "## 主要变更" not in text or "**完整变更**：" not in text:
+              raise SystemExit("release notes do not match the required template")
+          lines = text.splitlines()
+          headings = [line for line in lines if line.startswith("## ")]
+          allowed = ["## 版本说明", "## 主要变更", "## 兼容性", "## 验证", "## 相关版本", "## 致谢"]
+          positions = [allowed.index(item) for item in headings if item in allowed]
+          if (
+              headings[:2] != allowed[:2]
+              or len(headings) != len(set(headings))
+              or len(positions) != len(headings)
+              or positions != sorted(positions)
+          ):
+              raise SystemExit(f"release note headings are invalid: {headings}")
+          main_start = lines.index("## 主要变更") + 1
+          main_end = next(
+              (index for index in range(main_start, len(lines)) if lines[index].startswith("## ")),
+              len(lines),
+          )
+          main_items = [line for line in lines[main_start:main_end] if line.startswith("- ")]
+          if not 2 <= len(main_items) <= 4:
+              raise SystemExit("release notes must contain 2-4 main changes")
+          if not any("\u4e00" <= char <= "\u9fff" for char in text):
+              raise SystemExit("release notes must contain Chinese text")
+          PY
+          cp "$notes_source" "$notes_file"
           if gh release view "$tag" >/dev/null 2>&1; then
-            if [[ -f "$notes_file" ]]; then
-              gh release edit "$tag" \
-                --title "${title:-$tag}" \
-                --notes-file "$notes_file" \
-                --latest
-              echo "Release ${tag} notes updated from ${notes_file}."
-            else
-              echo "Release ${tag} already exists; no versioned notes found."
-            fi
+            gh release edit "$tag" \
+              --title "$tag" \
+              --notes-file "$notes_file" \
+              --latest
+            echo "Release ${tag} notes updated from ${notes_file}."
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          tag_commit=$(git rev-parse "refs/tags/${tag}^{commit}")
+          if [[ "$tag_commit" != "${{ github.event.workflow_run.head_sha }}" ]]; then
+            echo "Tag ${tag} does not point to the successful CI commit." >&2
+            exit 1
+          fi
           echo "publish=true" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "title=${title:-$tag}" >> "$GITHUB_OUTPUT"
+          echo "title=$tag" >> "$GITHUB_OUTPUT"
           echo "notes_file=$notes_file" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ github.token }}
@@ -72,19 +109,11 @@ jobs:
         shell: bash
         run: |
           notes_file="${{ steps.release.outputs.notes_file }}"
-          if [[ -f "$notes_file" ]]; then
-            gh release create "${{ steps.release.outputs.tag }}" \
-              dist/* \
-              --verify-tag \
-              --title "${{ steps.release.outputs.title }}" \
-              --notes-file "$notes_file" \
-              --latest
-          else
-            gh release create "${{ steps.release.outputs.tag }}" \
-              dist/* \
-              --verify-tag \
-              --title "${{ steps.release.outputs.title }}" \
-              --generate-notes
-          fi
+          gh release create "${{ steps.release.outputs.tag }}" \
+            dist/* \
+            --verify-tag \
+            --title "${{ steps.release.outputs.title }}" \
+            --notes-file "$notes_file" \
+            --latest
         env:
           GH_TOKEN: ${{ github.token }}
