@@ -85,7 +85,7 @@ uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.
 uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.0" camoufox fetch
 ```
 
-The first command downloads the dependencies and confirms the version, which keeps your client from timing out on the first start. The second downloads the Camoufox browser and its data, about 2.5 GB in our test, which takes a few minutes. They go into your user cache, so clearing uvx environments does not remove them. You can skip this step, but the first `launch_browser` then waits for the download.
+The first command downloads the dependencies and confirms the version, which keeps your client from timing out on the first start. The second downloads the Camoufox browser and its data, about 1.3 GB to download and about 2.5 GB unpacked on macOS. They go into your user cache, so clearing uvx environments does not remove them. If you skip this step, the first `launch_browser` downloads them and returns only when that finishes, about 4 minutes in our test, so your client may time out first.
 
 Client configuration:
 
@@ -106,9 +106,9 @@ Client configuration:
 
 Put server options after `camoufox-reverse-mcp`, for example `"--headless"` or `"--proxy", "http://127.0.0.1:7890"`.
 
-**Updating**: change `@v1.9.0` in the configuration to the new tag and restart your client. A tag never moves on its own. Without `@v1.9.0`, every start follows the latest commit on main, which is not recommended for daily use. If `check_environment` reports a missing browser, run `camoufox fetch` again with the new tag.
+**Updating**: find the latest tag on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases), change `@v1.9.0` in the configuration to it, and restart your client. A tag never moves on its own. Without `@v1.9.0`, every start follows the latest commit on main, which is not recommended for daily use. If `check_environment` reports a missing browser, run `camoufox fetch` again with the new tag.
 
-You can also install a persistent command. Set `command` to `camoufox-reverse-mcp` and leave out `args`:
+You can also install a persistent command. Set `command` to `camoufox-reverse-mcp` and leave out `args`. Fetch the browser with the `uvx ... camoufox fetch` command above, because both setups share the same browser:
 
 ```bash
 uv tool install "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.0"

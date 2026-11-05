@@ -24,6 +24,12 @@ def test_package_version_matches_project_metadata():
     assert declared.group(1) == __version__
 
 
+def test_readme_install_commands_pin_the_current_release():
+    pinned = f"camoufox-reverse-mcp.git@v{__version__}"
+    for name in ("README.md", "README_en.md"):
+        assert pinned in (ROOT / name).read_text(encoding="utf-8"), name
+
+
 def test_version_flag_reports_without_starting_or_patching(monkeypatch, capsys):
     calls = []
     monkeypatch.setattr(sys, "argv", ["camoufox-reverse-mcp", "--version"])

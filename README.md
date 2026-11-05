@@ -83,7 +83,7 @@ uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.
 uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.0" camoufox fetch
 ```
 
-第一条下载依赖并确认版本。先跑这一步，可以避免客户端首次启动 MCP 时等待超时。第二条下载 Camoufox 浏览器和配套数据，实测约 2.5GB，需要几分钟。它们保存在用户缓存目录，不随 uvx 环境清理。跳过这一步也能用，但第一次 `launch_browser` 会等到下载结束。
+第一条下载依赖并确认版本。先跑这一步，可以避免客户端首次启动 MCP 时等待超时。第二条下载 Camoufox 浏览器和配套数据，下载量约 1.3GB，macOS 上解压后约 2.5GB。它们保存在用户缓存目录，不随 uvx 环境清理。如果跳过这一步，第一次 `launch_browser` 会自动下载，要等下载结束才返回，实测约 4 分钟，客户端可能先超时。
 
 客户端配置：
 
@@ -104,9 +104,9 @@ uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.
 
 启动参数写在 `camoufox-reverse-mcp` 后面，例如 `"--headless"` 或 `"--proxy", "http://127.0.0.1:7890"`。
 
-**更新版本**：把配置里的 `@v1.9.0` 改成新标签，再重启客户端。标签是固定的，不改就不会变。去掉 `@v1.9.0` 会在每次启动时跟随 main 的最新提交，不建议在日常使用时这样配置。如果 `check_environment` 提示缺少浏览器，用新标签再运行一次 `camoufox fetch`。
+**更新版本**：在 [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases) 查看最新标签，把配置里的 `@v1.9.0` 改成新标签，再重启客户端。标签是固定的，不改就不会变。去掉 `@v1.9.0` 会在每次启动时跟随 main 的最新提交，不建议在日常使用时这样配置。如果 `check_environment` 提示缺少浏览器，用新标签再运行一次 `camoufox fetch`。
 
-也可以安装成常驻命令，此时配置里的 `command` 写 `camoufox-reverse-mcp`，不需要 `args`：
+也可以安装成常驻命令，此时配置里的 `command` 写 `camoufox-reverse-mcp`，不需要 `args`。浏览器仍用上面的 `uvx ... camoufox fetch` 下载，两种方式共用同一份浏览器：
 
 ```bash
 uv tool install "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.0"
