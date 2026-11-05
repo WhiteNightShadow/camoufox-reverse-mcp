@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.12"]
-        runtime: ["legacy", "current"]
+        runtime: ["legacy", "current", "resolved"]
         include:
           - runtime: "legacy"
             camoufox-version: "0.4.11"
@@ -25,6 +25,9 @@ jobs:
           - runtime: "current"
             camoufox-version: "0.5.5"
             playwright-version: "1.60.0"
+          - runtime: "resolved"
+            camoufox-version: "0.5.9"
+            playwright-version: "1.62.0"
 
     steps:
       - uses: actions/checkout@v5
@@ -65,4 +68,26 @@ jobs:
           python -m pip install -e . pytest pytest-asyncio
           "camoufox[geoip]==0.5.5" "playwright==1.60.0"
       - name: Run world, frame and hook lifecycle regressions
-        run: python -m pytest -q tests/test_main_world_and_frames.py tests/test_collection.py tests/test_network_evidence.py tests/test_navigation_diagnostics.py tests/test_js_parser.py tests/test_instrumentation_semantics.py tests/test_instrumentation_transport.py tests/test_function_trace_semantics.py tests/test_evaluate_transport.py tests/test_trace_snapshot_context.py
+        run: python -m pytest -q tests/test_main_world_and_frames.py tests/test_collection.py tests/test_network_evidence.py tests/test_navigation_diagnostics.py tests/test_js_parser.py tests/test_instrumentation_semantics.py tests/test_instrumentation_transport.py tests/test_function_trace_semantics.py tests/test_evaluate_transport.py tests/test_trace_snapshot_context.py tests/test_uvx_install.py
+
+  uvx-install:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build wheel
+        run: uv build --wheel --out-dir wheel
+      - name: Start the wheel through uvx and check the stdio protocol
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml)
+          wheel=$(ls wheel/*.whl)
+          uvx --from "$wheel" camoufox-reverse-mcp --version
+          python tests/uvx_smoke.py --expect-version "$version" -- uvx --from "$wheel" camoufox-reverse-mcp --headless

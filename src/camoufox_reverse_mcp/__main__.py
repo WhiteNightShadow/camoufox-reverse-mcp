@@ -9,16 +9,16 @@ import argparse
 # before FastMCP starts its event loop.
 import camoufox  # noqa: F401
 
+from . import __version__
 from .server import mcp
 from ._playwright_patch import patch_playwright_pageerror
+from ._stdio_guard import reserve_stdout_for_protocol
 
 
 def main():
-    # Fix the Playwright Firefox-driver pageError crash (issue #5) before the
-    # browser is ever launched. No-op on Playwright versions without the bug.
-    patch_playwright_pageerror()
-
     parser = argparse.ArgumentParser(description="Camoufox Reverse Engineering MCP Server")
+    parser.add_argument("--version", action="version",
+                        version=f"camoufox-reverse-mcp {__version__}")
     parser.add_argument("--proxy", type=str, help="Proxy server URL (e.g. http://127.0.0.1:7890)")
     parser.add_argument("--headless", action="store_true", help="Run in headless mode")
     parser.add_argument("--os", type=str, default="auto",
@@ -32,6 +32,10 @@ def main():
     parser.add_argument("--block-webrtc", action="store_true", help="Block WebRTC")
     args = parser.parse_args()
 
+    # Fix the Playwright Firefox-driver pageError crash (issue #5) before the
+    # browser is ever launched. No-op on Playwright versions without the bug.
+    patch_playwright_pageerror()
+
     from .browser import BrowserManager
     BrowserManager.default_config = {
         "proxy": {"server": args.proxy} if args.proxy else None,
@@ -44,6 +48,7 @@ def main():
         "block_webrtc": args.block_webrtc,
     }
 
+    reserve_stdout_for_protocol()
     mcp.run(transport="stdio")
 
 

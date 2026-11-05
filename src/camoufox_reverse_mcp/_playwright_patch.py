@@ -23,15 +23,21 @@ deliberately conservative:
 * It only rewrites the exact buggy tokens (``pageError.location.url`` etc.),
   which appear *only* in the vulnerable serialization path — so substring
   replacement cannot touch unrelated code.
-* It is a no-op on versions that don't contain those tokens (e.g. Playwright
-  >= 1.52 removed the ``location`` field entirely).
+* It is a no-op on versions that don't contain those tokens. The tokens are
+  still present in Playwright 1.62, so this is a real rewrite on current builds.
 * It is idempotent (re-running finds nothing to change).
+* It replaces files instead of writing through them. uv hardlinks installed
+  packages from its global cache on Linux and Windows, so an in-place write
+  would change that cached copy for every other project on the machine.
 * It never raises: any failure only prints a warning to stderr and startup
   continues normally.
 """
 from __future__ import annotations
 
+import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 # Exact buggy tokens -> safe replacements. Each left-hand string appears only
@@ -60,8 +66,26 @@ def _driver_lib_root() -> Path | None:
         return None
 
 
+def _replace_file(path: Path, text: str) -> None:
+    """Swap in new content without touching the old inode."""
+    descriptor, temporary = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+            stream.write(text)
+        shutil.copymode(path, temporary)
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
 def _patch_file(path: Path) -> bool:
-    """Patch a single JS file in place. Returns True only if it was rewritten."""
+    """Patch a single JS file. Returns True only if it was rewritten."""
     try:
         text = path.read_text(encoding="utf-8")
     except Exception:
@@ -75,7 +99,7 @@ def _patch_file(path: Path) -> bool:
     if new_text == text:
         return False
     try:
-        path.write_text(new_text, encoding="utf-8")
+        _replace_file(path, new_text)
         return True
     except Exception as e:
         # Read-only site-packages, permission issues, etc. — don't crash startup.

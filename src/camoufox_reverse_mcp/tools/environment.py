@@ -95,6 +95,13 @@ async def check_environment() -> dict:
             "error": str(e),
         }
 
+    if camoufox_runtime.get("active") is None and not camoufox_runtime.get("error"):
+        recommendations.append(
+            "No Camoufox browser is installed. Run `python -m camoufox fetch` in this "
+            "environment, or `uvx --from <same source as this MCP> camoufox fetch` for "
+            "uvx installs. Otherwise the first launch_browser downloads it during the call."
+        )
+
     overall_ok = (
         version_ok
         and all(d["ok"] for d in deps.values())

@@ -74,6 +74,49 @@ pip install -e .
 > v1.1.0 将 MCP Python SDK 固定在兼容的 v1 系列，并自动规范化可选参数
 > schema，可兼容 Moonshot/Kimi 等要求每个工具参数都包含 `type` 的严格服务。
 
+### 方式三：uvx（无需克隆，可指定版本）
+
+需要先安装 [uv](https://docs.astral.sh/uv/getting-started/installation/) 和 git。下面两条在终端各运行一次：
+
+```bash
+uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.0" camoufox-reverse-mcp --version
+uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.0" camoufox fetch
+```
+
+第一条下载依赖并确认版本。先跑这一步，可以避免客户端首次启动 MCP 时等待超时。第二条下载 Camoufox 浏览器和配套数据，实测约 2.5GB，需要几分钟。它们保存在用户缓存目录，不随 uvx 环境清理。跳过这一步也能用，但第一次 `launch_browser` 会等到下载结束。
+
+客户端配置：
+
+```json
+{
+  "mcpServers": {
+    "camoufox-reverse": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.0",
+        "camoufox-reverse-mcp"
+      ]
+    }
+  }
+}
+```
+
+启动参数写在 `camoufox-reverse-mcp` 后面，例如 `"--headless"` 或 `"--proxy", "http://127.0.0.1:7890"`。
+
+**更新版本**：把配置里的 `@v1.9.0` 改成新标签，再重启客户端。标签是固定的，不改就不会变。去掉 `@v1.9.0` 会在每次启动时跟随 main 的最新提交，不建议在日常使用时这样配置。如果 `check_environment` 提示缺少浏览器，用新标签再运行一次 `camoufox fetch`。
+
+也可以安装成常驻命令，此时配置里的 `command` 写 `camoufox-reverse-mcp`，不需要 `args`：
+
+```bash
+uv tool install "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.0"
+uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@<新标签>"
+```
+
+第二条用于更新。`uv tool upgrade` 不会移动已固定的标签，要用 `--force` 重新安装。
+
+已有的 `pip install -e .` 和 `python -m camoufox_reverse_mcp` 配置继续可用，不需要改动。
+
 ### 客户端配置
 
 <details>

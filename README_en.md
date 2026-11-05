@@ -76,6 +76,49 @@ pip install -e .
 > normalizes optional-parameter schemas for strict providers such as
 > Moonshot/Kimi that require a literal `type` on every tool property.
 
+### Option 3: uvx (no clone, pin a version)
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and git first, then run these once in a terminal:
+
+```bash
+uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.0" camoufox-reverse-mcp --version
+uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.0" camoufox fetch
+```
+
+The first command downloads the dependencies and confirms the version, which keeps your client from timing out on the first start. The second downloads the Camoufox browser and its data, about 2.5 GB in our test, which takes a few minutes. They go into your user cache, so clearing uvx environments does not remove them. You can skip this step, but the first `launch_browser` then waits for the download.
+
+Client configuration:
+
+```json
+{
+  "mcpServers": {
+    "camoufox-reverse": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.0",
+        "camoufox-reverse-mcp"
+      ]
+    }
+  }
+}
+```
+
+Put server options after `camoufox-reverse-mcp`, for example `"--headless"` or `"--proxy", "http://127.0.0.1:7890"`.
+
+**Updating**: change `@v1.9.0` in the configuration to the new tag and restart your client. A tag never moves on its own. Without `@v1.9.0`, every start follows the latest commit on main, which is not recommended for daily use. If `check_environment` reports a missing browser, run `camoufox fetch` again with the new tag.
+
+You can also install a persistent command. Set `command` to `camoufox-reverse-mcp` and leave out `args`:
+
+```bash
+uv tool install "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.0"
+uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@<new-tag>"
+```
+
+The second command updates it. `uv tool upgrade` does not move a pinned tag, so reinstall with `--force`.
+
+Existing `pip install -e .` and `python -m camoufox_reverse_mcp` setups keep working and need no changes.
+
 ### Client Configuration
 
 <details>
