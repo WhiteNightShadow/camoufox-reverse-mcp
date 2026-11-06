@@ -3,7 +3,7 @@ test_jsvmp.py - Smoke tests for the universal JSVMP toolchain.
 
 These tests verify the Python-side logic (template rendering, regex rewriting,
 cookie parsing, tool registration) without requiring a real browser.
-For real-site integration, use the scenarios in README.md manually.
+For real-site integration, use the scenarios in docs/TOOLS.md manually.
 """
 import json
 import os
