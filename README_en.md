@@ -3,7 +3,7 @@
 [![Release](https://img.shields.io/github/v/release/WhiteNightShadow/camoufox-reverse-mcp)](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases/latest)
 [![CI](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 [中文](README.md) | [English](README_en.md)
 
@@ -206,4 +206,4 @@ Hit a bug, want a new hook preset, or just want to chat about JS reverse enginee
 
 ## License
 
-MIT
+[MIT](LICENSE)

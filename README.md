@@ -3,7 +3,7 @@
 [![Release](https://img.shields.io/github/v/release/WhiteNightShadow/camoufox-reverse-mcp)](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases/latest)
 [![CI](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 [中文](README.md) | [English](README_en.md)
 
@@ -206,4 +206,4 @@ uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-revers
 
 ## 许可证
 
-MIT
+[MIT](LICENSE)
