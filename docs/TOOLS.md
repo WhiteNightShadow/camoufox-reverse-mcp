@@ -14,7 +14,7 @@
 ### 浏览器控制
 | 工具 | 说明 |
 |------|------|
-| `launch_browser` | 启动 Camoufox；可用 `browser_version` 单次选择已安装版本，不修改 active 配置 |
+| `launch_browser` | 启动 Camoufox；没传的参数沿用服务启动参数；可用 `browser_version` 单次选择已安装版本，不修改 active 配置 |
 | `close_browser` | 关闭浏览器，释放资源 |
 | `navigate` | 导航到指定 URL（支持 pre_inject_hooks、redirect_chain 追踪） |
 | `reload` | 刷新页面 |

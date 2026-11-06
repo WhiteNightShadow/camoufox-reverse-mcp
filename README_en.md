@@ -168,7 +168,7 @@ Put them after the start command. With uvx, put them after `camoufox-reverse-mcp
 | `--block-webrtc` | Block WebRTC |
 | `--version` | Print the version and exit |
 
-> **Note**: All of these apply only when the browser starts on its own, for example when `navigate` runs before `launch_browser`. A `launch_browser` call uses its own arguments instead, and only `--proxy` still applies if no `proxy` argument is passed. To run headless, say so in the chat, for example "launch it headless".
+> **Note**: Arguments passed to `launch_browser` take priority. Anything left out uses these options.
 
 ## Documentation
 

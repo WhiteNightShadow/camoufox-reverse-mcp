@@ -14,7 +14,7 @@
 ### Browser Control
 | Tool | Description |
 |------|-------------|
-| `launch_browser` | Launch Camoufox; optionally select one installed version without changing active config |
+| `launch_browser` | Launch Camoufox; arguments left out use the server options; optionally select one installed version without changing active config |
 | `close_browser` | Close browser and release resources |
 | `navigate` | Navigate to URL (supports pre_inject_hooks, redirect_chain tracking) |
 | `reload` | Reload current page |

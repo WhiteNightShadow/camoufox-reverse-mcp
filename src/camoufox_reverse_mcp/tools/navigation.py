@@ -15,14 +15,14 @@ _PRE_INJECT_REGISTER_TIMEOUT = 10.0
 
 @mcp.tool()
 async def launch_browser(
-    headless: bool = False,
-    os_type: str = "auto",
-    locale: str = "auto",
+    headless: bool | None = None,
+    os_type: str | None = None,
+    locale: str | None = None,
     proxy: str | None = None,
-    humanize: bool = False,
-    geoip: bool = False,
-    block_images: bool = False,
-    block_webrtc: bool = False,
+    humanize: bool | None = None,
+    geoip: bool | None = None,
+    block_images: bool | None = None,
+    block_webrtc: bool | None = None,
     enable_trace: bool = False,
     trace_objects: list[str] | None = None,
     trace_max_events: int = 100000,
@@ -31,10 +31,16 @@ async def launch_browser(
 ) -> dict:
     """Launch the Camoufox anti-detection browser, or attach to a running one.
 
+    Leave out any option you do not need to change. It then keeps the value the
+    server was started with (for example --headless), or the default below if
+    the server did not set one. An option passed here wins for this launch.
+
     Args:
         headless: Run in headless mode (default False).
-        os_type: OS fingerprint - "auto", "windows", "macos", or "linux".
-        locale: Browser locale (e.g. "zh-CN"). "auto" detects system locale.
+        os_type: OS fingerprint - "auto", "windows", "macos", or "linux"
+            (default "auto").
+        locale: Browser locale (e.g. "zh-CN"). "auto" detects system locale
+            (default "auto").
         proxy: Proxy server URL (e.g. "http://127.0.0.1:7890").
         humanize: Enable humanized mouse movement.
         geoip: Auto-infer geolocation from proxy IP.
@@ -78,13 +84,17 @@ async def launch_browser(
             return result
 
         config = {
-            "headless": headless, "os": os_type, "locale": locale,
-            "humanize": humanize, "geoip": geoip,
-            "block_images": block_images, "block_webrtc": block_webrtc,
             "enable_trace": enable_trace,
             "trace_objects": trace_objects or [],
             "trace_max_events": trace_max_events,
         }
+        # Only values the caller passed go in, so the rest keep the startup options.
+        options = {
+            "headless": headless, "os": os_type, "locale": locale,
+            "humanize": humanize, "geoip": geoip,
+            "block_images": block_images, "block_webrtc": block_webrtc,
+        }
+        config.update({key: value for key, value in options.items() if value is not None})
         if browser_version:
             config["browser_version"] = browser_version
         if proxy:

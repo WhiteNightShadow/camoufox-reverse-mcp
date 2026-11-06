@@ -168,7 +168,7 @@ uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-revers
 | `--block-webrtc` | 禁用 WebRTC |
 | `--version` | 输出版本后退出 |
 
-> **注意**：这些参数只在浏览器自动启动时全部生效，比如没调用 `launch_browser` 就直接 `navigate`。调用 `launch_browser` 时以它的参数为准，只有 `--proxy` 在没传 `proxy` 时继续生效。要用无头模式，可以在对话里直接说明，例如“用无头模式启动”。
+> **注意**：调用 `launch_browser` 时传了的参数优先，没传的沿用这里的启动参数。
 
 ## 文档
 
