@@ -4,6 +4,14 @@
 
 Full notes for v1.1.1 and later are in [docs/releases](docs/releases) (Chinese). Packages are on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases).
 
+## v1.9.1 (2026-11-06) — Server Options Fix
+
+- `launch_browser` no longer overrides server options: `--headless`, `--os`, `--locale`, `--geoip`, `--humanize`, `--block-images` and `--block-webrtc` now apply unless the call passes its own value
+- README rebuilt, with version history moved to `CHANGELOG_en.md` and tool details to `docs/TOOLS_en.md`
+- Added the MIT `LICENSE` file
+
+See the [Chinese release notes](docs/releases/v1.9.1.md).
+
 ## v1.9.0 (2026-11-05) — uvx Install Support
 
 - Install and start with `uvx` at a pinned tag, without cloning; adds `--version`

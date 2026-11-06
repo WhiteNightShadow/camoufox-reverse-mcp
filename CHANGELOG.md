@@ -4,6 +4,14 @@
 
 v1.1.1 起每个版本的完整说明在 [docs/releases](docs/releases)，发布包在 [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases)。
 
+## v1.9.1（2026-11-06）— 启动参数修复
+
+- 修复 `launch_browser` 覆盖启动参数的问题：`--headless`、`--os`、`--locale`、`--geoip`、`--humanize`、`--block-images`、`--block-webrtc` 现在调用它时也生效，传了的参数优先
+- README 改版，版本记录移到 `CHANGELOG.md`，工具表和使用场景移到 `docs/TOOLS.md`
+- 新增 MIT `LICENSE` 文件
+
+详情见 [v1.9.1](docs/releases/v1.9.1.md)。
+
 ## v1.9.0（2026-11-05）— uvx 安装支持
 
 - 支持用 `uvx` 按标签固定版本安装和启动，不需要克隆仓库；新增 `--version`
