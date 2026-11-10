@@ -4,6 +4,15 @@
 
 v1.1.1 起每个版本的完整说明在 [docs/releases](docs/releases)，发布包在 [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases)。
 
+## v1.9.2（2026-11-10）— JSVMP 探针转义修复
+
+- `hook_jsvmp_interpreter` 改用 `json.dumps` 把 `script_url` 写进 hook，引号、反斜杠和换行都只是字符串内容，不会再跳出字符串执行代码。以前含反斜杠或换行的值会被改坏或让 hook 装不上
+- 模板开头的注释不再写入 `script_url`，值里带 `*/` 也不会再跳出注释
+- `max_entries` 先转成整数再写入 hook
+- 感谢 [@tunguyen1993](https://github.com/tunguyen1993) 报告问题并给出修复建议
+
+详情见 [v1.9.2](docs/releases/v1.9.2.md)。
+
 ## v1.9.1（2026-11-06）— 启动参数修复
 
 - 修复 `launch_browser` 覆盖启动参数的问题：`--headless`、`--os`、`--locale`、`--geoip`、`--humanize`、`--block-images`、`--block-webrtc` 现在调用它时也生效，传了的参数优先

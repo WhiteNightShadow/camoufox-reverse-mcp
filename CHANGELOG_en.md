@@ -4,6 +4,15 @@
 
 Full notes for v1.1.1 and later are in [docs/releases](docs/releases) (Chinese). Packages are on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases).
 
+## v1.9.2 (2026-11-10) — JSVMP Probe Escaping Fix
+
+- `hook_jsvmp_interpreter` writes `script_url` into the hook with `json.dumps`, so quotes, backslashes and line breaks stay inside the string and can no longer run as code. Values with a backslash or line break used to be changed or stop the hook from installing
+- The comment at the top of each template no longer receives `script_url`, so `*/` in the value can no longer end the comment
+- `max_entries` is converted to an integer before it goes into the hook
+- Thanks to [@tunguyen1993](https://github.com/tunguyen1993) for reporting the problem and suggesting the fix
+
+See the [Chinese release notes](docs/releases/v1.9.2.md).
+
 ## v1.9.1 (2026-11-06) — Server Options Fix
 
 - `launch_browser` no longer overrides server options: `--headless`, `--os`, `--locale`, `--geoip`, `--humanize`, `--block-images` and `--block-webrtc` now apply unless the call passes its own value

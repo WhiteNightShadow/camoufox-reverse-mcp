@@ -77,8 +77,8 @@ Add this to your client's MCP configuration, such as `.cursor/mcp.json` for Curs
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and git first, then run these once in a terminal:
 
 ```bash
-uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.1" camoufox-reverse-mcp --version
-uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.1" camoufox fetch
+uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.2" camoufox-reverse-mcp --version
+uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.2" camoufox fetch
 ```
 
 The first command downloads the dependencies and confirms the version, which keeps your client from timing out on the first start. The second downloads the browser into your user cache, so clearing uvx environments does not remove it.
@@ -92,7 +92,7 @@ Add this to your client's MCP configuration:
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.1",
+        "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.2",
         "camoufox-reverse-mcp"
       ]
     }
@@ -103,18 +103,18 @@ Add this to your client's MCP configuration:
 Claude Code can add it with one command:
 
 ```bash
-claude mcp add --scope user camoufox-reverse -- uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.1" camoufox-reverse-mcp
+claude mcp add --scope user camoufox-reverse -- uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.2" camoufox-reverse-mcp
 ```
 
 <details>
 <summary>Updating and persistent installs</summary>
 
-**Updating**: find the latest tag on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases), change `@v1.9.1` in the configuration to it, and restart your client. A tag never moves on its own. Without `@v1.9.1`, every start follows the latest commit on main, which is not recommended for daily use. If `check_environment` reports a missing browser, run `camoufox fetch` again with the new tag.
+**Updating**: find the latest tag on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases), change `@v1.9.2` in the configuration to it, and restart your client. A tag never moves on its own. Without `@v1.9.2`, every start follows the latest commit on main, which is not recommended for daily use. If `check_environment` reports a missing browser, run `camoufox fetch` again with the new tag.
 
 **Persistent install**: set `command` to `camoufox-reverse-mcp` and leave out `args`. Fetch the browser with the `uvx ... camoufox fetch` command above, because both setups share the same browser.
 
 ```bash
-uv tool install "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.1"
+uv tool install "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.2"
 uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@<new-tag>"
 ```
 
@@ -182,9 +182,9 @@ Put them after the start command. With uvx, put them after `camoufox-reverse-mcp
 
 ## Changelog
 
+- **v1.9.2** (2026-11-10): `hook_jsvmp_interpreter` no longer lets `script_url` run as code. [Notes](docs/releases/v1.9.2.md)
 - **v1.9.1** (2026-11-06): `launch_browser` no longer overrides server options. [Notes](docs/releases/v1.9.1.md)
 - **v1.9.0** (2026-11-05): `uvx` install support; third-party output no longer enters the MCP protocol stream. [Notes](docs/releases/v1.9.0.md)
-- **v1.8.0** (2026-09-08): Real upstream cases and observation semantics. [Notes](docs/releases/v1.8.0.md)
 
 See [CHANGELOG_en.md](CHANGELOG_en.md) for every version.
 
@@ -195,6 +195,7 @@ See [CHANGELOG_en.md](CHANGELOG_en.md) for every version.
 - [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP execution-site requirements and analysis materials
 - [@dsaw1111](https://github.com/dsaw1111) — Camoufox 152 version-gap and PropertyTracer upgrade request
 - [@chung1912](https://github.com/chung1912) — `uvx` install suggestion and `uv tool install` setup
+- [@tunguyen1993](https://github.com/tunguyen1993) — `script_url` escaping report and fix for `hook_jsvmp_interpreter`
 
 ## Feedback / Contact
 
