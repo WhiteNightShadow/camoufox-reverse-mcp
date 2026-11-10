@@ -4,6 +4,14 @@
 
 Full notes for v1.1.1 and later are in [docs/releases](docs/releases) (Chinese). Packages are on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases).
 
+## v1.9.3 (2026-11-10) — JSVMP Probe Fix
+
+- The probes from `hook_jsvmp_interpreter` and `navigate(pre_inject_hooks=["jsvmp_probe"])` now run in the page main world. They used to run in the isolated world and recorded nothing from page scripts. Read the log with `evaluate_js("window.__mcp_jsvmp_log || []", world="main")`
+- Proxy mode no longer recurses forever: after wrapping `Function.prototype.call/apply/bind`, the probe calls through a saved `Reflect.apply`. Before, any later JS in that world failed with too much recursion, and without `script_url` tool calls hung until they timed out
+- `remove_hooks` fully restores the functions, getters and globals the probes replaced. The probes' own globals are no longer enumerable, and the install banner is printed only at document start or returned by the tool, so page code that wraps console methods never sees it
+
+See the [Chinese release notes](docs/releases/v1.9.3.md).
+
 ## v1.9.2 (2026-11-10) — JSVMP Probe Escaping Fix
 
 - `hook_jsvmp_interpreter` writes `script_url` into the hook with `json.dumps`, so quotes, backslashes and line breaks stay inside the string and can no longer run as code. Values with a backslash or line break used to be changed or stop the hook from installing

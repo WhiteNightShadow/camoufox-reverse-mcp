@@ -4,6 +4,14 @@
 
 v1.1.1 起每个版本的完整说明在 [docs/releases](docs/releases)，发布包在 [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases)。
 
+## v1.9.3（2026-11-10）— JSVMP 探针修复
+
+- `hook_jsvmp_interpreter` 和 `navigate(pre_inject_hooks=["jsvmp_probe"])` 的探针改装到页面主世界。以前装在隔离世界，页面脚本的读取和调用一条都记录不到；日志改用 `evaluate_js("window.__mcp_jsvmp_log || []", world="main")` 读取
+- proxy 模式修复无限递归：包装 `Function.prototype.call/apply/bind` 后，探针内部改用保存好的 `Reflect.apply`。以前装上后同一环境里再执行 JS 就报 too much recursion，不带 `script_url` 时工具调用会卡到超时
+- `remove_hooks` 能完整还原探针替换过的函数、getter 和全局对象；探针自己的全局变量改为不可枚举，安装提示只在文档开头打印或放进工具返回值，页面代码拦截 console 也看不到
+
+详情见 [v1.9.3](docs/releases/v1.9.3.md)。
+
 ## v1.9.2（2026-11-10）— JSVMP 探针转义修复
 
 - `hook_jsvmp_interpreter` 改用 `json.dumps` 把 `script_url` 写进 hook，引号、反斜杠和换行都只是字符串内容，不会再跳出字符串执行代码。以前含反斜杠或换行的值会被改坏或让 hook 装不上
