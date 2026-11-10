@@ -6,6 +6,17 @@ import os
 from ..server import mcp, browser_manager
 
 
+def _fill_shared_placeholders(template: str, script_url: str, max_entries: int) -> str:
+    """Fill the placeholders both JSVMP hook templates share.
+
+    json.dumps turns script_url into a complete JS string literal, so quotes,
+    backslashes and line breaks in it cannot end the string early.
+    """
+    return (template
+        .replace("'{{SCRIPT_URL}}'", json.dumps(script_url))
+        .replace("{{MAX_ENTRIES}}", str(int(max_entries))))
+
+
 @mcp.tool()
 async def hook_jsvmp_interpreter(
     script_url: str = "",
@@ -58,9 +69,7 @@ async def hook_jsvmp_interpreter(
                 return {"error": "jsvmp_transparent_hook.js not found"}
             with open(hook_path, "r", encoding="utf-8") as f:
                 template = f.read()
-            hook_js = (template
-                .replace("{{SCRIPT_URL}}", script_url.replace('"', '\\"').replace("'", "\\'"))
-                .replace("{{MAX_ENTRIES}}", str(max_entries)))
+            hook_js = _fill_shared_placeholders(template, script_url, max_entries)
             if persistent:
                 await browser_manager.add_persistent_script(
                     f"jsvmp_transparent:{script_url or 'all'}", hook_js)
@@ -93,9 +102,7 @@ async def hook_jsvmp_interpreter(
                                  "localStorage", "sessionStorage", "performance"]
             with open(os.path.join(hooks_dir, "jsvmp_hook.js"), "r", encoding="utf-8") as f:
                 template = f.read()
-            hook_js = (template
-                .replace("{{SCRIPT_URL}}", script_url.replace('"', '\\"').replace("'", "\\'"))
-                .replace("{{MAX_ENTRIES}}", str(max_entries))
+            hook_js = (_fill_shared_placeholders(template, script_url, max_entries)
                 .replace("{{TRACK_CALLS}}", "true" if track_calls else "false")
                 .replace("{{TRACK_PROPS}}", "true" if track_props else "false")
                 .replace("{{TRACK_REFLECT}}", "true" if track_reflect else "false")
