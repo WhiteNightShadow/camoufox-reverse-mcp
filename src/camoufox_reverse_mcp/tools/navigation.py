@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json as _json
 import os
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from ..server import browser_manager, mcp
 from ..utils.frames import list_frame_metadata
+from ..utils.jsvmp_hooks import main_world_init_script, proxy_probe, transparent_probe
+from ..utils.worlds import native_main_world_available
 
 _PRE_INJECT_REGISTER_TIMEOUT = 10.0
 
@@ -191,7 +192,7 @@ async def navigate(
 
         if pre_inject_hooks:
             for name in pre_inject_hooks:
-                ok, msg = await _inject_hook_by_name(name)
+                ok, msg = await _inject_hook_by_name(name, page)
                 if ok:
                     hooks_injected.append(name)
                 else:
@@ -257,8 +258,12 @@ async def navigate(
         return {"error": str(e)}
 
 
-async def _inject_hook_by_name(name: str) -> tuple[bool, str]:
-    """Register a hook as a persistent context-level script."""
+async def _inject_hook_by_name(name: str, page=None) -> tuple[bool, str]:
+    """Register a hook as a persistent context-level script.
+
+    page tells the JSVMP probes whether Camoufox's native main-world channel is
+    on; without one they assume it is.
+    """
     hooks_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "hooks")
     preset_files = {
         "xhr": "xhr_hook.js", "fetch": "fetch_hook.js",
@@ -267,24 +272,12 @@ async def _inject_hook_by_name(name: str) -> tuple[bool, str]:
         "cookie_hook": "cookie_hook.js", "runtime_probe": "runtime_probe.js",
     }
     try:
-        if name == "jsvmp_probe":
-            with open(os.path.join(hooks_dir, "jsvmp_hook.js"), "r", encoding="utf-8") as f:
-                tpl = f.read()
-            default_proxy = ["navigator", "screen", "history", "localStorage",
-                             "sessionStorage", "performance"]
-            js = (tpl.replace("{{SCRIPT_URL}}", "").replace("{{MAX_ENTRIES}}", "10000")
-                .replace("{{TRACK_CALLS}}", "true").replace("{{TRACK_PROPS}}", "true")
-                .replace("{{TRACK_REFLECT}}", "true")
-                .replace("'{{PROXY_OBJECTS}}'", _json.dumps(_json.dumps(default_proxy))))
-            persist_name = "pre_inject:jsvmp_probe"
-        elif name == "jsvmp_probe_transparent":
-            hook_path = os.path.join(hooks_dir, "jsvmp_transparent_hook.js")
-            if not os.path.exists(hook_path):
-                return False, "jsvmp_transparent_hook.js not found"
-            with open(hook_path, "r", encoding="utf-8") as f:
-                tpl = f.read()
-            js = tpl.replace("{{SCRIPT_URL}}", "").replace("{{MAX_ENTRIES}}", "10000")
-            persist_name = "pre_inject:jsvmp_probe_transparent"
+        # The JSVMP probes go into the page main world, like hook_jsvmp_interpreter.
+        if name in ("jsvmp_probe", "jsvmp_probe_transparent"):
+            native = page is None or await native_main_world_available(page)
+            probe = proxy_probe() if name == "jsvmp_probe" else transparent_probe()
+            js = main_world_init_script(probe, native=native)
+            persist_name = f"pre_inject:{name}"
         elif name in preset_files:
             fpath = os.path.join(hooks_dir, preset_files[name])
             if not os.path.exists(fpath):

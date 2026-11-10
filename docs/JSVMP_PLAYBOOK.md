@@ -6,7 +6,7 @@
 
 ```python
 await launch_browser(headless=False)
-await start_network_capture(capture_body=False)
+await network_capture(action="start", capture_body=False)
 r = await navigate("https://target.com/")
 ```
 
@@ -87,7 +87,7 @@ log = await get_instrumentation_log(tag_filter="vmp",
   `trace_property_access(action="stop")`。它在当前构建声明的固定 Gecko 原生点
   记录（reverse.5 为 77 点），
   不替换 getter/Proxy；但未命中不是“未访问”的证明，高负载仍可能形成时间侧信道
-- ⚠️ `hook_jsvmp_interpreter(mode="transparent")` — 比 proxy 模式安全得多,但某些极严格的 RS 版本仍能感知 descriptor 的 getter 函数 identity 变化。只有在源码插桩失败时才退到这里
+- ⚠️ `hook_jsvmp_interpreter(mode="transparent")` — 比 proxy 模式安全得多,但它在页面主世界里替换了 getter:getter 函数 identity 变了,`Function.prototype.toString.call(getter)` 也能看出是 JS 源码。某些极严格的 RS 版本能感知。只有在源码插桩失败时才退到这里
 
 ---
 
@@ -99,7 +99,7 @@ log = await get_instrumentation_log(tag_filter="vmp",
 
 ```python
 await launch_browser(headless=False)
-await start_network_capture(capture_body=True)
+await network_capture(action="start", capture_body=True)
 r = await navigate(
     "https://target.com/",
     pre_inject_hooks=["jsvmp_probe", "xhr", "fetch", "crypto"],
@@ -108,7 +108,8 @@ r = await navigate(
 # 让用户做一次挑战操作(滑块/验证码)
 # ...
 # 然后看 trace
-log = await get_jsvmp_log(type_filter="proxy_get")
+# 探针日志在页面主世界
+log = await evaluate_js("(window.__mcp_jsvmp_log || []).filter(e => e.type === 'proxy_get')", world="main")
 xhr = await get_trace_data("XMLHttpRequest.prototype.send")
 ```
 

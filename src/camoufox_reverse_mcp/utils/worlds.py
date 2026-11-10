@@ -24,6 +24,20 @@ def wrapped_main_world_script(script: str, *, script_is_function: bool = True) -
     }}"""
 
 
+NATIVE_PROBE = (
+    "mw:() => (async () => ({__mcp_native_ok: true, value: await Promise.resolve(null)}))()"
+)
+
+
+async def native_main_world_available(target: Any) -> bool:
+    """True when Camoufox's mw: channel works here (launched with main_world_eval)."""
+    try:
+        probe = await target.evaluate(NATIVE_PROBE)
+    except Exception:
+        return False
+    return isinstance(probe, dict) and probe.get("__mcp_native_ok") is True
+
+
 def wrapped_main_world_init_script(script: str) -> str:
     """Return an IIFE form suitable for BrowserContext.add_init_script()."""
     return "(" + wrapped_main_world_script(script, script_is_function=False) + ")()"
@@ -60,9 +74,7 @@ async def evaluate_in_world(
     try:
         # Match the real payload's Promise contract. Some older mw: bridges
         # return synchronous values but drop Promise results.
-        probe = await target.evaluate(
-            "mw:() => (async () => ({__mcp_native_ok: true, value: await Promise.resolve(null)}))()"
-        )
+        probe = await target.evaluate(NATIVE_PROBE)
         if not isinstance(probe, dict) or probe.get("__mcp_native_ok") is not True:
             raise RuntimeError("Camoufox main-world channel returned no probe sentinel")
     except Exception as native_error:

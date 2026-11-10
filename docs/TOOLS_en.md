@@ -68,7 +68,7 @@
 
 | Tool | Description |
 |------|-------------|
-| `hook_jsvmp_interpreter` | JSVMP runtime probe (`mode="proxy"` full coverage / `mode="transparent"` signature-safe) |
+| `hook_jsvmp_interpreter` | JSVMP runtime probe in the page main world (`mode="proxy"` full coverage / `mode="transparent"` replaces getters only, fewer changes); read the log with `evaluate_js("window.__mcp_jsvmp_log \|\| []", world="main")` |
 | `instrumentation(action)` | Source-level instrumentation: `install` / `log` / `stop` / `reload` / `status` |
 | `compare_env` | Collect browser env fingerprint for Node.js/jsdom comparison |
 

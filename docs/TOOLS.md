@@ -68,7 +68,7 @@
 
 | 工具 | 说明 |
 |------|------|
-| `hook_jsvmp_interpreter` | JSVMP 运行时探针（`mode="proxy"` 全覆盖 / `mode="transparent"` 签名安全） |
+| `hook_jsvmp_interpreter` | JSVMP 运行时探针，装在页面主世界（`mode="proxy"` 全覆盖 / `mode="transparent"` 只替换 getter，改动较少）；日志用 `evaluate_js("window.__mcp_jsvmp_log \|\| []", world="main")` 读取 |
 | `instrumentation(action)` | 源码级插桩：`install` 注册改写 / `log` 获取日志 / `stop` 停止 / `reload` 重载 / `status` 查看状态 |
 | `compare_env` | 浏览器环境指纹收集，用于与 Node.js/jsdom 对比 |
 

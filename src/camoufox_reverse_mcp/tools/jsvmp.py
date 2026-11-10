@@ -1,20 +1,15 @@
 from __future__ import annotations
 
 import json
-import os
 
 from ..server import mcp, browser_manager
-
-
-def _fill_shared_placeholders(template: str, script_url: str, max_entries: int) -> str:
-    """Fill the placeholders both JSVMP hook templates share.
-
-    json.dumps turns script_url into a complete JS string literal, so quotes,
-    backslashes and line breaks in it cannot end the string early.
-    """
-    return (template
-        .replace("'{{SCRIPT_URL}}'", json.dumps(script_url))
-        .replace("{{MAX_ENTRIES}}", str(int(max_entries))))
+from ..utils.jsvmp_hooks import (
+    READ_WITH,
+    main_world_init_script,
+    proxy_probe,
+    transparent_probe,
+)
+from ..utils.worlds import evaluate_in_world, native_main_world_available
 
 
 @mcp.tool()
@@ -28,14 +23,21 @@ async def hook_jsvmp_interpreter(
     proxy_objects: list[str] | None = None,
     max_entries: int = 10000,
 ) -> dict:
-    """Install a JSVMP runtime probe.
+    """Install a JSVMP runtime probe in the page main world.
 
-    Multi-path instrumentation for JSVMP interpreters. Wraps Reflect.get/apply,
-    installs Proxies on globals (navigator, screen, etc.), intercepts timing APIs.
+    The probe runs where page scripts run, so their property reads and calls
+    are recorded. Read the log with
+    evaluate_js("window.__mcp_jsvmp_log || []", world="main"); the default
+    isolated world cannot see it. remove_hooks() restores what the probe replaced.
 
-    LIMITATIONS: "proxy" mode is DETECTABLE by RS/AK-style signature-based anti-bot.
-    For those, use instrumentation(action='install') (source-level rewrite) or
-    mode='transparent' instead.
+    mode="proxy" wraps Function.prototype.apply/call/bind, Reflect.*,
+    Date.now, performance.now and Math.random, and puts Proxies on globals
+    (navigator, screen, etc.). Page code can detect all of this, so RS/AK-style
+    signature-based anti-bot will notice; use instrumentation(action='install')
+    (source-level rewrite) for those. mode="transparent" only replaces getters
+    on prototypes (Navigator, Screen, Document, ...). It changes less, but the
+    getters are no longer the originals: Function.prototype.toString.call(getter)
+    shows JS source.
 
     IMPORTANT — timing for sync-loaded SDKs (e.g. webmssdk):
         JSVMP interpreters capture native references at startup via closures.
@@ -51,92 +53,85 @@ async def hook_jsvmp_interpreter(
     Args:
         script_url: Target script URL substring for stack filtering.
         persistent: Survive navigation (default True).
-        mode: "proxy" (full coverage, detectable) or "transparent" (safe, lower coverage).
+        mode: "proxy" (full coverage, detectable) or "transparent" (replaces getters only).
         track_calls, track_props, track_reflect: Only for mode="proxy".
         proxy_objects: Objects to proxy (default: navigator, screen, etc.).
         max_entries: Log buffer cap (default 10000).
 
     Returns:
-        dict with status, mode, coverage summary.
+        dict with status, mode, world, read_with and install details.
     """
     try:
-        hooks_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "hooks")
         page = await browser_manager.get_active_page()
-
         if mode == "transparent":
-            hook_path = os.path.join(hooks_dir, "jsvmp_transparent_hook.js")
-            if not os.path.exists(hook_path):
-                return {"error": "jsvmp_transparent_hook.js not found"}
-            with open(hook_path, "r", encoding="utf-8") as f:
-                template = f.read()
-            hook_js = _fill_shared_placeholders(template, script_url, max_entries)
-            if persistent:
-                await browser_manager.add_persistent_script(
-                    f"jsvmp_transparent:{script_url or 'all'}", hook_js)
-            # v1.0.1: detect if page already loaded (timing issue)
-            page_already_loaded = page.url and page.url != "about:blank"
-            try:
-                await page.evaluate(hook_js)
-            except Exception as e:
-                return {"status": "partial", "mode": "transparent",
-                        "warning": f"Evaluate failed: {e}", "persistent": persistent}
-            result = {
-                "status": "instrumented", "mode": "transparent",
-                "script_url": script_url or "(all)", "persistent": persistent,
-                "data_location": "window.__mcp_jsvmp_log",
-            }
+            probe = transparent_probe(script_url, max_entries)
+            script_name = f"jsvmp_transparent:{script_url or 'all'}"
+        elif mode == "proxy":
+            probe = proxy_probe(script_url, max_entries, track_calls, track_props,
+                                track_reflect, proxy_objects)
+            script_name = f"jsvmp_probe:{script_url or 'all'}"
+        else:
+            return {"error": f"unknown mode '{mode}', use 'proxy' or 'transparent'"}
+
+        # v1.0.1: detect if page already loaded (timing issue)
+        page_already_loaded = page.url and page.url != "about:blank"
+        install_error = None
+        try:
+            info, backend, backend_warning = await evaluate_in_world(
+                page, probe, "main", script_is_function=False)
+        except Exception as e:
+            install_error, backend = e, None
+        if persistent:
+            # The init script takes the same channel the immediate install could use.
+            native = (backend == "camoufox_native" if backend
+                      else await native_main_world_available(page))
+            await browser_manager.add_persistent_script(
+                script_name, main_world_init_script(probe, native=native))
+        if install_error is not None:
+            return {"status": "partial", "mode": mode, "world": "main",
+                    "warning": f"Evaluate failed: {install_error}", "persistent": persistent}
+        info = info if isinstance(info, dict) else {}
+
+        result = {
+            "status": "instrumented", "mode": mode,
+            "script_url": script_url or "(all)", "persistent": persistent,
+            "world": "main", "execution_backend": backend,
+            "data_location": "window.__mcp_jsvmp_log",
+            "read_with": READ_WITH,
+        }
+        if info.get("installed") is False:
+            result["already_installed"] = True
+        warnings = [backend_warning] if backend_warning else []
+        if mode == "transparent":
+            if "tapped" in info:
+                result["getters_tapped"] = info["tapped"]
+                result["getters_seen"] = info["total"]
             if page_already_loaded:
-                result["warnings"] = [
+                warnings.append(
                     "Hooks installed on already-loaded page. If the target "
                     "SDK (e.g. webmssdk) was loaded BEFORE this call, it "
                     "likely captured native references at startup (closure "
                     "capture) and won't trigger your hooks. Call "
                     "instrumentation(action='reload') or re-navigate to "
                     "force SDK re-init with hooks in place."
-                ]
-            return result
-
-        elif mode == "proxy":
-            if proxy_objects is None:
-                proxy_objects = ["navigator", "screen", "history",
-                                 "localStorage", "sessionStorage", "performance"]
-            with open(os.path.join(hooks_dir, "jsvmp_hook.js"), "r", encoding="utf-8") as f:
-                template = f.read()
-            hook_js = (_fill_shared_placeholders(template, script_url, max_entries)
-                .replace("{{TRACK_CALLS}}", "true" if track_calls else "false")
-                .replace("{{TRACK_PROPS}}", "true" if track_props else "false")
-                .replace("{{TRACK_REFLECT}}", "true" if track_reflect else "false")
-                .replace("'{{PROXY_OBJECTS}}'", json.dumps(json.dumps(proxy_objects))))
-            if persistent:
-                await browser_manager.add_persistent_script(
-                    f"jsvmp_probe:{script_url or 'all'}", hook_js)
-            # v1.0.1: detect if page already loaded (timing issue)
-            page_already_loaded = page.url and page.url != "about:blank"
-            try:
-                await page.evaluate(hook_js)
-            except Exception as e:
-                return {"status": "partial", "mode": "proxy",
-                        "warning": f"Evaluate failed: {e}", "persistent": persistent}
-            result = {
-                "status": "instrumented", "mode": "proxy",
-                "script_url": script_url or "(all)", "persistent": persistent,
-                "data_location": "window.__mcp_jsvmp_log",
-                "warning": "proxy mode is detectable by RS/AK-style anti-bot.",
-            }
+                )
+        else:
+            result["warning"] = "proxy mode is detectable by RS/AK-style anti-bot."
+            # Failures on about:blank (e.g. storage) say nothing about the target page.
+            if info.get("proxyFailures") and page_already_loaded:
+                warnings.append("Could not proxy: " + ", ".join(map(str, info["proxyFailures"])))
             if page_already_loaded:
-                result.setdefault("warnings", [])
-                if isinstance(result.get("warning"), str):
-                    result["warnings"].append(result.pop("warning"))
-                result["warnings"].append(
+                warnings.insert(0, result.pop("warning"))
+                warnings.append(
                     "Hooks installed on already-loaded page. If the target "
                     "SDK was loaded BEFORE this call, it likely captured "
                     "native references at startup (closure capture) and "
                     "won't trigger your hooks. Call "
                     "instrumentation(action='reload') to re-trigger."
                 )
-            return result
-        else:
-            return {"error": f"unknown mode '{mode}', use 'proxy' or 'transparent'"}
+        if warnings:
+            result["warnings"] = warnings
+        return result
     except Exception as e:
         return {"error": str(e)}
 

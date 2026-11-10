@@ -1,5 +1,5 @@
 /**
- * jsvmp_transparent_hook.js - Signature-safe runtime observation.
+ * jsvmp_transparent_hook.js - Low-footprint runtime observation.
  *
  * Only replaces getter functions on prototype objects (Navigator.prototype,
  * Screen.prototype, Document.prototype, etc.). Proxy is never used.
@@ -8,25 +8,38 @@
  * Detection resistance:
  *   - typeof navigator, navigator.constructor, Navigator itself, and the
  *     prototype chain are all identical to pristine.
- *   - Function.prototype.toString.call(the-new-getter) returns the SAME
- *     string the original getter's toString() would return.
+ *   - the-new-getter.toString() returns the original getter's string.
+ *     Function.prototype.toString.call(the-new-getter) still shows this
+ *     file's source, and the getter has an own toString property.
  *   - No Proxy objects exist, so proxy-detection heuristics all fail.
- *   - Only residual artifact: the getter function object identity differs.
+ *   - The getter function object identity differs from the original.
  *
  * Template variables:
  *   {{SCRIPT_URL}}   - target script URL substring for stack filtering
  *   {{MAX_ENTRIES}}  - log buffer cap
  *
  * Output:
- *   window.__mcp_jsvmp_log - structured log array (shared with proxy hook)
+ *   window.__mcp_jsvmp_log - structured log array in the page main world
+ *   (shared with proxy hook)
+ *
+ * This file is a function expression. utils/jsvmp_hooks.py calls it in the
+ * page main world and handles the returned {installed, banner, ...}; the
+ * probe never prints to the page's console itself.
  */
 (function () {
     if (window.__mcp_jsvmp_transparent_installed) {
-        try { console.log('[JSVMP-T] Already installed, skipping'); } catch (e) {}
-        return;
+        return { installed: false, banner: '[JSVMP-T] Already installed, skipping' };
     }
-    window.__mcp_jsvmp_transparent_installed = true;
-    window.__mcp_jsvmp_log = window.__mcp_jsvmp_log || [];
+    // The probe runs in the page main world: keep its globals out of
+    // for...in and Object.keys(window).
+    var _hide = Object.defineProperty;
+    function hide(name, value) {
+        try {
+            _hide(window, name, { value: value, writable: true, configurable: true, enumerable: false });
+        } catch (e) { window[name] = value; }
+    }
+    hide('__mcp_jsvmp_transparent_installed', true);
+    if (!window.__mcp_jsvmp_log) hide('__mcp_jsvmp_log', []);
 
     var CFG = {
         scriptUrl: '{{SCRIPT_URL}}',
@@ -40,6 +53,11 @@
     var _Object_getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
     var _Object_getOwnPropertyNames = Object.getOwnPropertyNames;
     var _Object_getPrototypeOf = Object.getPrototypeOf;
+    var _Reflect_apply = Reflect.apply;
+    var _Date_now = Date.now;
+    // busy: do not record the probe's own reads, or re-enter while recording.
+    var busy = true;
+    var originals = [];
 
     function preview(v, maxLen) {
         maxLen = maxLen || 150;
@@ -73,7 +91,7 @@
 
     function log(entry) {
         if (window.__mcp_jsvmp_log.length >= CFG.maxEntries) return;
-        entry.ts = Date.now();
+        entry.ts = _Date_now();
         window.__mcp_jsvmp_log.push(entry);
     }
 
@@ -86,23 +104,26 @@
 
             var origGet = desc.get;
             var origToStringSrc;
-            try { origToStringSrc = _FP_toString.call(origGet); }
+            try { origToStringSrc = _Reflect_apply(_FP_toString, origGet, []); }
             catch (e) { origToStringSrc = 'function ' + prop + '() { [native code] }'; }
 
             var fakeGet = function () {
-                var v = origGet.call(this);
-                try {
-                    var stack = shortStack();
-                    if (inTargetScript(stack)) {
-                        log({
-                            type: 'transparent_get',
-                            owner: ownerName,
-                            key: prop,
-                            value: preview(v),
-                            stack: stack
-                        });
-                    }
-                } catch (e) {}
+                var v = _Reflect_apply(origGet, this, []);
+                if (!busy) {
+                    busy = true;
+                    try {
+                        var stack = shortStack();
+                        if (inTargetScript(stack)) {
+                            log({
+                                type: 'transparent_get',
+                                owner: ownerName,
+                                key: prop,
+                                value: preview(v),
+                                stack: stack
+                            });
+                        }
+                    } catch (e) {} finally { busy = false; }
+                }
                 return v;
             };
 
@@ -121,8 +142,7 @@
             } catch (e) {}
 
             // v0.6.0: save original descriptor for uninstall
-            window.__mcp_transparent_originals = window.__mcp_transparent_originals || [];
-            window.__mcp_transparent_originals.push({ owner: owner, prop: prop, desc: desc });
+            originals.push({ owner: owner, prop: prop, desc: desc });
 
             _Object_defineProperty(owner, prop, {
                 get: fakeGet,
@@ -167,24 +187,29 @@
         }
     }
 
+    busy = false;
+
     // v0.6.0: uninstall function
-    window.__mcp_transparent_uninstall = function() {
+    hide('__mcp_transparent_uninstall', function() {
+        busy = true;
         var restored = [];
-        var origs = window.__mcp_transparent_originals || [];
-        for (var i = 0; i < origs.length; i++) {
+        for (var i = 0; i < originals.length; i++) {
             try {
-                _Object_defineProperty(origs[i].owner, origs[i].prop, origs[i].desc);
-                restored.push(origs[i].prop);
+                _Object_defineProperty(originals[i].owner, originals[i].prop, originals[i].desc);
+                restored.push(originals[i].prop);
             } catch (e) {}
         }
+        originals = [];
         window.__mcp_jsvmp_transparent_installed = false;
-        window.__mcp_transparent_originals = [];
         return { restored: restored };
-    };
+    });
 
-    try {
-        console.log('[JSVMP-T] Transparent probe installed. Tapped ' +
-                    tapStats.tapped + '/' + tapStats.total + ' getters. ' +
-                    'scriptUrl=' + (CFG.scriptUrl || '(all)'));
-    } catch (e) {}
-})();
+    return {
+        installed: true,
+        tapped: tapStats.tapped,
+        total: tapStats.total,
+        banner: '[JSVMP-T] Transparent probe installed. Tapped ' +
+                tapStats.tapped + '/' + tapStats.total + ' getters. ' +
+                'scriptUrl=' + (CFG.scriptUrl || '(all)')
+    };
+})

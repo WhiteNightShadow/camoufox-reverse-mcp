@@ -1008,8 +1008,7 @@ async def remove_hooks(keep_persistent: bool = False) -> dict:
         restored: list[str] = []
         uninstall_incomplete = False
 
-        uninstall_js = r"""
-        (function() {
+        uninstall_js = r"""() => {
           var out = { uninstalled: [], errors: [] };
           if (typeof window.__mcp_jsvmp_uninstall === 'function') {
             try {
@@ -1026,23 +1025,26 @@ async def remove_hooks(keep_persistent: bool = False) -> dict:
             } catch (e) { out.errors.push('transparent_uninstall: ' + e.message); }
           }
           return out;
-        })();
-        """
-        try:
-            in_page = await page.evaluate(uninstall_js)
-            for item in (in_page.get("uninstalled") or []):
-                hook = item.get("hook")
-                items = item.get("restored") or []
-                if items:
-                    restored.extend([f"{hook}:{n}" for n in items])
-                else:
-                    restored.append(hook)
-            for err in (in_page.get("errors") or []):
-                warnings.append(f"in-page uninstall: {err}")
+        }"""
+        # The JSVMP probes run in the page main world; before v1.9.3 they ran in
+        # the isolated world, so look in both.
+        for world in ("main", "isolated"):
+            try:
+                in_page, _, _ = await evaluate_in_world(page, uninstall_js, world)
+                in_page = in_page if isinstance(in_page, dict) else {}
+                for item in (in_page.get("uninstalled") or []):
+                    hook = item.get("hook")
+                    items = item.get("restored") or []
+                    if items:
+                        restored.extend([f"{hook}:{n}" for n in items])
+                    else:
+                        restored.append(hook)
+                for err in (in_page.get("errors") or []):
+                    warnings.append(f"in-page uninstall ({world}): {err}")
+                    uninstall_incomplete = True
+            except Exception as e:
+                warnings.append(f"in-page uninstall eval failed ({world}): {e}")
                 uninstall_incomplete = True
-        except Exception as e:
-            warnings.append(f"in-page uninstall eval failed: {e}")
-            uninstall_incomplete = True
 
         frames = list(getattr(page, "frames", []) or [])
         targets = frames or [page]
