@@ -172,6 +172,23 @@ trace_property_access(action="stop", mode="summary")
 10. compare_env()                                  ← Collect env for Node.js
 ```
 
+### Scenario 2b: Stage comparison for control-flow-flattened VMPs
+
+Turn each dispatcher call into a comparable event stream, so a real browser run and
+a locally emulated run can be aligned state by state:
+
+```
+1. instrumentation(action="install", url_pattern="**/security-js/*.js",
+                   tap_stage_calls=True, tag="vmp")   ← rewrite return fn.apply(this,[p].concat(...))
+2. navigate("https://target-site.com/")               ← install must come before navigate
+3. instrumentation(action="log", type_filter="tap_stage")
+   → summary.hot_stages counts every state `p`; entries carry argc / args / ret previews
+4. Repeat with the same seed on the other side (local env emulation) and align by p sequence
+```
+
+`tap_stage_calls` is a literal match: it is independent of `mode`/`filter_*` and still
+applies when the file cannot be parsed (`stats.stage_only=true` means stage taps only).
+
 ### Scenario 3: Verify Signing Code
 
 ```

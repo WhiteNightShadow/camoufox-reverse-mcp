@@ -155,6 +155,22 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
 10. compare_env()                                  ← 收集环境用于 Node.js 补齐
 ```
 
+### 场景 2b：控制流平坦化 VMP 的阶段对照
+
+把「每个状态的分发调用」变成可对照的事件流，适合在真实浏览器与本地补环境之间逐阶段比对：
+
+```
+1. instrumentation(action="install", url_pattern="**/security-js/*.js",
+                   tap_stage_calls=True, tag="vmp")   ← 改写 return fn.apply(this,[p].concat(...))
+2. navigate("https://target-site.com/")               ← 必须 install 之后再导航
+3. instrumentation(action="log", type_filter="tap_stage")
+   → summary.hot_stages 给出每个状态 p 的调用次数，entries 里带 argc / args / ret 预览
+4. 同一份 seed 在另一端（本地补环境）重复一次，按 p 序列和 ret 摘要逐段对齐
+```
+
+要点：`tap_stage_calls` 是**字面量匹配**，与 `mode`/`filter_*` 无关，文件解析失败时仍然生效
+（此时 `stats.stage_only=true`，表示只做了阶段插桩）。
+
 ### 场景 3：验证协议代码
 
 ```

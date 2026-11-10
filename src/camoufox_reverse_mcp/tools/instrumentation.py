@@ -56,6 +56,7 @@ async def instrumentation(
     tag: str = "vmp",
     rewrite_member_access: bool = True,
     rewrite_calls: bool = True,
+    tap_stage_calls: bool = False,
     max_rewrites: int = 20000,
     fallback_on_error: bool = True,
     ignore_csp: bool = False,
@@ -98,6 +99,13 @@ async def instrumentation(
         tag: For "install"/"log" — group identifier.
         rewrite_member_access: For "install" — tap obj[key] reads.
         rewrite_calls: For "install" — tap fn(args) calls.
+        tap_stage_calls: For "install" — rewrite the flattened-VMP dispatcher
+            shape `return fn.apply(this, [<int>].concat(Array.prototype.slice
+            .call(arguments)))` into per-state `tap_stage` events (state id `p`,
+            argc, first args previews, return preview). This is a literal match,
+            so it also works when the rest of the file is not parseable, and it
+            is independent of `mode`/`filter_*`. Use it to compare a VM's state
+            sequence between a real browser and an emulated environment.
         include_source_site: For "install" — attach a stable site_id and
             monotonic seq to tap events, plus an original-source range map in
             the log response. Default False.
@@ -108,7 +116,8 @@ async def instrumentation(
         clear_log: For "reload" — clear JSVMP logs before reload.
         wait_until: For "reload" — "load" / "domcontentloaded" / "networkidle".
         tag_filter: For "log" — filter by tag.
-        type_filter: For "log" — "tap_get", "tap_call", "tap_method", "tap_call_err".
+        type_filter: For "log" — "tap_get", "tap_call", "tap_method",
+            "tap_call_err", "tap_stage".
         key_filter: For "log" — substring match on property/method name.
         limit: For "log" — max entries to return.
         clear: For "log" — clear log after retrieval in the selected main world.
@@ -148,6 +157,7 @@ async def instrumentation(
             tag=tag,
             rewrite_member_access=rewrite_member_access,
             rewrite_calls=rewrite_calls,
+            tap_stage_calls=tap_stage_calls,
             max_rewrites=max_rewrites,
             fallback_on_error=fallback_on_error,
             ignore_csp=ignore_csp,
@@ -198,7 +208,8 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
                    rewrite_calls, max_rewrites, fallback_on_error, ignore_csp,
                    filter_property_names, filter_object_names,
                    max_file_size, on_oversized,
-                   include_source_site=False) -> dict:
+                   include_source_site=False,
+                   tap_stage_calls=False) -> dict:
     try:
         if mode not in ("ast", "regex") or on_oversized not in ("selective", "skip", "force"):
             return {"error": "Invalid mode or on_oversized policy"}
@@ -292,6 +303,7 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
                         filter_property_names=list(prop_filter_set) if prop_filter_set else None,
                         filter_object_names=list(obj_filter_set) if obj_filter_set else None,
                         include_source_site=include_source_site,
+                        tap_stage_calls=tap_stage_calls,
                     )
                     if rewritten is None:
                         stats["last_error"] = rewrite_stats.get("error", "AST parse/rewrite failed")
@@ -299,14 +311,19 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
                             mode_used = "regex (fallback)"
                             rewritten, rewrite_stats = regex_rewrite(src, tag=tag,
                                 rewrite_member_access=rewrite_member_access,
-                                max_rewrites=max_rewrites, include_source_site=include_source_site)
+                                max_rewrites=max_rewrites, include_source_site=include_source_site,
+                                tap_stage_calls=tap_stage_calls)
                 elif mode == "regex":
                     rewritten, rewrite_stats = regex_rewrite(src, tag=tag,
                         rewrite_member_access=rewrite_member_access,
-                        max_rewrites=max_rewrites, include_source_site=include_source_site)
+                        max_rewrites=max_rewrites, include_source_site=include_source_site,
+                        tap_stage_calls=tap_stage_calls)
                 else:
                     raise ValueError("mode must be ast or regex")
-                edit_count = rewrite_stats.get("edits", rewrite_stats.get("member_access_rewrites", 0))
+                edit_count = rewrite_stats.get("edits")
+                if edit_count is None:
+                    edit_count = (rewrite_stats.get("member_access_rewrites", 0)
+                                  + rewrite_stats.get("stage_rewrites", 0))
                 stats["last_parser_backend"] = rewrite_stats.get("parser_backend")
                 if rewritten is None or not edit_count:
                     stats["files_passed_through"] += 1
@@ -363,6 +380,7 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
             "route_level": "context",
             "selective": bool(prop_filter_set or obj_filter_set),
             "include_source_site": include_source_site,
+            "tap_stage_calls": tap_stage_calls,
             "filter_property_names": filter_property_names,
             "filter_object_names": filter_object_names,
             "note": "Route active. Navigate or reload to trigger rewrite.",
@@ -393,11 +411,13 @@ async def _get_log(tag_filter, type_filter, key_filter, limit, clear, frame_url=
             data = [d for d in data
                     if key_filter in (d.get("key") or "")
                     or key_filter in (d.get("method") or "")
-                    or key_filter in (d.get("name") or "")]
+                    or key_filter in (d.get("name") or "")
+                    or key_filter in str(d.get("p") or "")]
 
         key_count: dict[str, int] = {}
         method_count: dict[str, int] = {}
         function_count: dict[str, int] = {}
+        stage_count: dict[str, int] = {}
         site_count: dict[str, int] = {}
         for e in data:
             if e.get("type") == "tap_get":
@@ -406,6 +426,9 @@ async def _get_log(tag_filter, type_filter, key_filter, limit, clear, frame_url=
             elif e.get("type") == "tap_method":
                 m = f"{e.get('objType', '?')}.{e.get('method', '?')}"
                 method_count[m] = method_count.get(m, 0) + 1
+            elif e.get("type") == "tap_stage":
+                k = str(e.get("p", "?"))
+                stage_count[k] = stage_count.get(k, 0) + 1
             elif e.get("type") in ("tap_call", "tap_call_err"):
                 fn = e.get("name", "?")
                 function_count[fn] = function_count.get(fn, 0) + 1
@@ -447,6 +470,9 @@ async def _get_log(tag_filter, type_filter, key_filter, limit, clear, frame_url=
                 "hot_keys": dict(sorted(key_count.items(), key=lambda x: -x[1])[:30]),
                 "hot_methods": dict(sorted(method_count.items(), key=lambda x: -x[1])[:30]),
                 "hot_functions": dict(sorted(function_count.items(), key=lambda x: -x[1])[:30]),
+                **({"hot_stages": dict(sorted(stage_count.items(),
+                                             key=lambda x: -int(x[1]))[:60])}
+                   if stage_count else {}),
             },
         }
         if site_count:

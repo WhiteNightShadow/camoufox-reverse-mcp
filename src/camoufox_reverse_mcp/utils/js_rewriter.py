@@ -28,6 +28,7 @@ INSTRUMENT_RUNTIME = r"""
   // Capture intrinsics once; never consult a target function's .apply/.name.
   var apply = Reflect.apply;
   var arrayPush = Array.prototype.push;
+  var slice = Array.prototype.slice;
   var stringSlice = String.prototype.slice;
   var stringIndexOf = String.prototype.indexOf;
   var stringifyPrimitive = String;
@@ -126,6 +127,25 @@ INSTRUMENT_RUNTIME = r"""
   window.__mcp_tap_method = function(obj, key, args, tag, siteId){
     return window.__mcp_prepare_method(obj, key, tag, siteId)(args);
   };
+  // Dispatcher-level tap: per-state enter/leave evidence for flattened VMPs.
+  // Arguments are copied before the call so the trace keeps the original list.
+  window.__mcp_tap_stage = function(p, fn, thisArg, args, tag, siteId){
+    var list = apply(slice, args, [0]);
+    var r = apply(fn, thisArg, [p].concat(list));
+    try {
+      if (_enabled(tag, false)) {
+        var n = list.length > 3 ? 3 : list.length;
+        var previews = [];
+        for (var i = 0; i < n; i++) {
+          try { apply(arrayPush, previews, [_preview(list[i])]); }
+          catch (e) { apply(arrayPush, previews, ['?']); }
+        }
+        _push({ type:'tap_stage', tag:tag, p:p, argc:list.length,
+                args:previews, ret:_preview(r) }, siteId);
+      }
+    } catch (ignored) {}
+    return r;
+  };
 })();
 """
 
@@ -190,6 +210,73 @@ def build_source_site(source_id: str, kind: str, start: int, end: int) -> dict:
     }
 
 
+# ============ Stage / dispatcher-call rewrite ============
+
+# Control-flow-flattened JSVMP dispatchers funnel every state through a single
+# call shape, e.g. ``return l.apply(this, [9425].concat(Array.prototype.slice
+# .call(arguments)))``. Rewriting that shape gives per-state enter/leave events
+# (state id ``p``) without touching the dispatcher body, which is usually the
+# most useful evidence when a VM must be matched stage-by-stage.
+_STAGE_CALL_RE = re.compile(
+    r"return\s+(?P<fn>[A-Za-z_$][A-Za-z0-9_$]*)\.apply\(\s*this\s*,\s*"
+    r"\[\s*(?P<p>\d+)\s*\]\s*\.concat\(\s*"
+    r"Array\.prototype\.slice\.call\(\s*arguments\s*\)\s*\)\s*\)"
+)
+
+_LEADING_STRING_RE = re.compile(
+    rf"{_TRIVIA}(?:{_STRING}){_TRIVIA}(?:;|(?=\r?\n|$))"
+)
+
+
+def directive_end(src: str) -> int:
+    """Return the offset just past a leading directive prologue (best effort)."""
+    pos = 0
+    if src.startswith("#!"):
+        newline = src.find("\n")
+        pos = len(src) if newline == -1 else newline + 1
+    while True:
+        match = _LEADING_STRING_RE.match(src, pos)
+        if match is None:
+            return pos
+        pos = match.end()
+
+
+def rewrite_stage_calls(
+    src: str,
+    tag: str = "vmp",
+    max_rewrites: int = 20000,
+    include_source_site: bool = False,
+    source_id: str = "",
+) -> Tuple[str, int, list[dict]]:
+    """Rewrite dispatcher entry calls into ``__mcp_tap_stage`` taps.
+
+    Only the exact ``return fn.apply(this, [<int>].concat(...arguments))`` shape
+    is matched; every other call site is left byte-for-byte unchanged.
+    """
+    edits: list[tuple[int, int, str]] = []
+    source_sites: list[dict] = []
+    if include_source_site and not source_id:
+        source_id, _ = source_identity(src)
+    for match in _STAGE_CALL_RE.finditer(src):
+        if len(edits) >= max_rewrites:
+            break
+        start, end = match.span()
+        state, fn = match.group("p"), match.group("fn")
+        site_arg = ""
+        if include_source_site:
+            site = build_source_site(source_id, "tap_stage", start, end)
+            source_sites.append(site)
+            site_arg = ", " + json.dumps(site["site_id"])
+        edits.append((
+            start, end,
+            f"return __mcp_tap_stage({state}, {fn}, this, arguments, {json.dumps(tag)}{site_arg})",
+        ))
+    for start, end, replacement in reversed(edits):
+        src = src[:start] + replacement + src[end:]
+    return src, len(edits), source_sites
+
+
+
 def _rewrite_member_access(
     src: str,
     tag: str,
@@ -230,14 +317,20 @@ def _rewrite_member_access(
 def regex_rewrite(src: str, tag: str = "vmp",
                   rewrite_member_access: bool = True,
                   max_rewrites: int = 5000,
-                  include_source_site: bool = False) -> Tuple[str, dict]:
+                  include_source_site: bool = False,
+                  tap_stage_calls: bool = False) -> Tuple[str, dict]:
     """Conservative dependency-free fallback, with explicit semantic boundaries.
 
     Unrecognized programs are returned byte-for-byte, without a preamble. In
     particular modern syntax parse failures do not trigger heuristic rewrites.
+
+    ``tap_stage_calls`` is independent of the simple-statement whitelist: the
+    dispatcher call shape is matched literally and does not depend on the rest
+    of the program being parseable.
     """
     statements = _simple_statements(src)
-    stats = {"member_access_rewrites": 0, "semantic_boundary": _REGEX_BOUNDARY}
+    stats = {"member_access_rewrites": 0, "stage_rewrites": 0,
+             "semantic_boundary": _REGEX_BOUNDARY}
     if statements is None:
         stats["skipped_reason"] = "unsupported_program_syntax"
     new_src = src
@@ -252,21 +345,24 @@ def regex_rewrite(src: str, tag: str = "vmp",
             include_source_site=include_source_site, source_id=source_id,
         )
         stats["member_access_rewrites"] = n
+    if tap_stage_calls:
+        new_src, n, stage_sites = rewrite_stage_calls(
+            new_src, tag, max_rewrites,
+            include_source_site=include_source_site, source_id=source_id,
+        )
+        stats["stage_rewrites"] = n
+        source_sites.extend(stage_sites)
     if include_source_site:
         stats.update({
             "source_id": source_id,
             "source_sha256": source_sha256,
             "source_sites": source_sites,
         })
-    if not stats["member_access_rewrites"]:
+    if not stats["member_access_rewrites"] and not stats["stage_rewrites"]:
         return src, stats
-    directive_end = 0
-    for statement in statements or []:
-        if statement.group('declaration') or not re.fullmatch(_STRING, statement.group('expression')):
-            break
-        directive_end = statement.end()
-    return (new_src[:directive_end] + ";\n" + INSTRUMENT_RUNTIME + "\n"
-            + new_src[directive_end:]), stats
+    insert_at = directive_end(new_src)
+    return (new_src[:insert_at] + ";\n" + INSTRUMENT_RUNTIME + "\n"
+            + new_src[insert_at:]), stats
 
 
 # ============ AST-based rewrite (via page-side Acorn) ============

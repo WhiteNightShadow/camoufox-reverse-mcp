@@ -20,6 +20,8 @@ from typing import Any, Callable
 from .js_rewriter import (  # reuse the same runtime preamble
     INSTRUMENT_RUNTIME,
     build_source_site,
+    directive_end,
+    rewrite_stage_calls,
     source_identity,
 )
 
@@ -50,7 +52,7 @@ def _walk(node: Any, parent: Any, callback: Callable[[Any, Any], Any]) -> None:
 # Names that must never be tap-wrapped
 _SKIP_CALLEE_NAMES = frozenset({
     '__mcp_tap_get', '__mcp_tap_call', '__mcp_tap_method',
-    '__mcp_prepare_method',
+    '__mcp_prepare_method', '__mcp_tap_stage',
     'require', 'eval',
 })
 
@@ -64,6 +66,7 @@ def ast_rewrite(
     filter_property_names: list[str] | None = None,
     filter_object_names: list[str] | None = None,
     include_source_site: bool = False,
+    tap_stage_calls: bool = False,
 ) -> tuple[str | None, dict]:
     """Rewrite JS source via esprima-python AST walk.
 
@@ -82,10 +85,24 @@ def ast_rewrite(
     from .js_parser import parse_source
 
     stats: dict[str, Any] = {
-        "parsed": False, "edits": 0,
+        "parsed": False, "edits": 0, "stage_edits": 0,
         "member_edits": 0, "call_edits": 0, "method_edits": 0,
         "skipped": 0, "overlap_skipped": 0,
     }
+
+    # Dispatcher taps run before the AST pass: the rewrite is a literal match of
+    # one call shape, so it does not depend on esprima understanding modern
+    # syntax, and member/call taps then see stable offsets in the same source.
+    stage_sites: list[dict] = []
+    if tap_stage_calls:
+        stage_source_id = ""
+        if include_source_site:
+            stage_source_id, _ = source_identity(src)
+        src, stage_edits, stage_sites = rewrite_stage_calls(
+            src, tag, max_edits,
+            include_source_site=include_source_site, source_id=stage_source_id,
+        )
+        stats["stage_edits"] = stage_edits
 
     try:
         tree, parser_backend = parse_source(src, locations=include_source_site)
@@ -94,7 +111,20 @@ def ast_rewrite(
         stats["parsed"] = True
     except Exception as e:
         stats["error"] = f"parse_failed: {type(e).__name__}: {e}"
-        return None, stats
+        if not stats["stage_edits"]:
+            return None, stats
+        # Stage taps are literal rewrites, so they stay usable even when the
+        # parser cannot handle this file. Report the reduced scope explicitly.
+        stats["edits"] = stats["stage_edits"]
+        stats["stage_only"] = True
+        insert_at = directive_end(src)
+        if include_source_site:
+            stats.update({
+                "source_sites": stage_sites,
+                "source_id": source_identity(src)[0],
+            })
+        return (src[:insert_at] + ";\n" + INSTRUMENT_RUNTIME + "\n"
+                + src[insert_at:]), stats
 
     edits: list[dict] = []
     # A MemberExpression can be an assignment reference several pattern levels
@@ -361,7 +391,7 @@ def ast_rewrite(
             "source_sha256": source_sha256,
             "source_sites": [
                 e["source_site"] for e in edits if e.get("source_site")
-            ],
+            ] + stage_sites,
         })
 
     edits.sort(key=lambda e: -e["start"])
@@ -369,9 +399,9 @@ def ast_rewrite(
     for e in edits:
         out = out[:e["start"]] + e["replacement"] + out[e["end"]:]
 
-    stats["edits"] = len(edits)
+    stats["edits"] = len(edits) + stats["stage_edits"]
     # Keep the original directive prologue active (also when terminated by ASI).
-    directive_end = (src.find("\n") + 1 if "\n" in src else len(src)) if src.startswith("#!") else 0
+    directive_at = directive_end(src)
     for statement in tree.body:
         expr = getattr(statement, 'expression', None)
         # esprima-python drops directive annotations after an empty string.
@@ -381,6 +411,6 @@ def ast_rewrite(
                 and isinstance(expr.value, str)
                 and statement.range[0] == expr.range[0]):
             break
-        directive_end = statement.range[1]
-    return (out[:directive_end] + ";\n" + INSTRUMENT_RUNTIME + "\n"
-            + out[directive_end:]), stats
+        directive_at = statement.range[1]
+    return (out[:directive_at] + ";\n" + INSTRUMENT_RUNTIME + "\n"
+            + out[directive_at:]), stats
