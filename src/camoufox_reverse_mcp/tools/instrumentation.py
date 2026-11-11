@@ -423,6 +423,7 @@ async def _get_log(tag_filter, type_filter, key_filter, limit, clear, frame_url=
         method_count: dict[str, int] = {}
         function_count: dict[str, int] = {}
         stage_count: dict[str, int] = {}
+        break_count: dict[str, int] = {}
         site_count: dict[str, int] = {}
         for e in data:
             if e.get("type") == "tap_get":
@@ -434,6 +435,9 @@ async def _get_log(tag_filter, type_filter, key_filter, limit, clear, frame_url=
             elif e.get("type") == "tap_stage":
                 k = str(e.get("p", "?"))
                 stage_count[k] = stage_count.get(k, 0) + 1
+            elif e.get("type") == "tap_stage_break":
+                k = str(e.get("p", "?"))
+                break_count[k] = break_count.get(k, 0) + 1
             elif e.get("type") in ("tap_call", "tap_call_err"):
                 fn = e.get("name", "?")
                 function_count[fn] = function_count.get(fn, 0) + 1
@@ -478,6 +482,9 @@ async def _get_log(tag_filter, type_filter, key_filter, limit, clear, frame_url=
                 **({"hot_stages": dict(sorted(stage_count.items(),
                                              key=lambda x: -int(x[1]))[:60])}
                    if stage_count else {}),
+                **({"stage_breaks": dict(sorted(break_count.items(),
+                                                key=lambda x: -int(x[1]))[:30])}
+                   if break_count else {}),
             },
         }
         if site_count:

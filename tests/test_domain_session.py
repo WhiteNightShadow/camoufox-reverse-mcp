@@ -42,7 +42,7 @@ def test_new_tools_count():
     """v1.0.0 should have ~32 tools."""
     from camoufox_reverse_mcp.server import mcp
     tools = mcp._tool_manager.list_tools()
-    assert 25 <= len(tools) <= 40, f"Expected 25-40 tools, got {len(tools)}"
+    assert 25 <= len(tools) <= 50, f"Expected 25-50 tools, got {len(tools)}"
 
 
 def test_version():

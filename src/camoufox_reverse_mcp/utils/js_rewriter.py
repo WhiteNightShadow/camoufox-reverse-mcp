@@ -145,8 +145,72 @@ INSTRUMENT_RUNTIME = r"""
                 args:previews, ret:_preview(r) }, siteId);
       }
     } catch (ignored) {}
+    try { _maybeBreak(p, list, r, tag, siteId); } catch (ignored) {}
     return r;
   };
+  // ---- stage break: bounded deep capture for selected states ----
+  // Opt-in only: configured through stage_break(), which writes __mcp_tap_cfg.breaks.
+  var SNAP_MAX_STR = 200;
+  function _snap(v, depth, budget){
+    if (v === null) return null;
+    var t = typeof v;
+    if (t === 'number' || t === 'boolean') return v;
+    if (t === 'undefined') return {__t:'undefined'};
+    if (t === 'string') {
+      return v.length > SNAP_MAX_STR
+        ? apply(stringSlice, v, [0, SNAP_MAX_STR]) + '...'
+        : v;
+    }
+    if (t === 'function' || t === 'symbol' || t === 'bigint') return {__t:t};
+    if (depth <= 0) return {__t:'object'};
+    var i, out;
+    try {
+      if (Object.prototype.toString.call(v) === '[object Array]') {
+        out = [];
+        var len = v.length;
+        var take = len > budget ? budget : len;
+        for (i = 0; i < take; i++) apply(arrayPush, out, [_snap(v[i], depth - 1, budget)]);
+        if (len > take) apply(arrayPush, out, [{__t:'truncated', length:len}]);
+        return out;
+      }
+      out = {};
+      var keys = Object.keys(v);
+      var count = keys.length > budget ? budget : keys.length;
+      for (i = 0; i < count; i++) out[keys[i]] = _snap(v[keys[i]], depth - 1, budget);
+      if (keys.length > count) out.__truncated = keys.length;
+      return out;
+    } catch (e) { return {__t:'unreadable'}; }
+  }
+  function _stageStack(){
+    var out = [];
+    try {
+      var lines = String(new Error().stack || '').split('\n');
+      for (var i = 0; i < lines.length && out.length < 20; i++) {
+        var line = lines[i];
+        // Drop the bridge frames: they describe this probe, not the target code.
+        if (apply(stringIndexOf, line, ['chrome://juggler']) !== -1) continue;
+        if (apply(stringIndexOf, line, ['__mcp_tap_stage']) !== -1) continue;
+        if (apply(stringIndexOf, line, ['_maybeBreak']) !== -1) continue;
+        apply(arrayPush, out, [line.replace(/^\s+/, '')]);
+      }
+    } catch (e) {}
+    return out;
+  }
+  function _maybeBreak(p, list, ret, tag, siteId){
+    var cfg = window.__mcp_tap_cfg;
+    var breaks = cfg && cfg.breaks;
+    if (!breaks) return;
+    var b = breaks[p];
+    if (!b) return;
+    if (b.limit > 0 && (b.hits || 0) >= b.limit) return;
+    b.hits = (b.hits || 0) + 1;
+    var depth = b.depth || 2, budget = b.maxItems || 50;
+    var event = { type:'tap_stage_break', tag:tag, p:p, hit:b.hits, argc:list.length };
+    event.args = _snap(list, depth, budget);
+    if (b.capture !== 'args_only') event.ret = _snap(ret, depth, budget);
+    if (b.capture === 'args_ret_stack') event.stack = _stageStack();
+    _push(event, siteId);
+  }
 })();
 """
 

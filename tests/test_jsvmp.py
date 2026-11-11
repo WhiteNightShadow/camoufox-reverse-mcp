@@ -189,7 +189,7 @@ def test_jsvmp_hook_has_new_template_vars():
         os.path.dirname(os.path.dirname(__file__)),
         "src", "camoufox_reverse_mcp", "hooks"
     )
-    with open(os.path.join(hooks_dir, "jsvmp_hook.js"), "r") as f:
+    with open(os.path.join(hooks_dir, "jsvmp_hook.js"), "r", encoding="utf-8") as f:
         content = f.read()
     assert "{{TRACK_CALLS}}" in content
     assert "{{TRACK_PROPS}}" in content
@@ -208,7 +208,7 @@ def test_cookie_hook_uses_prototype_chain():
         os.path.dirname(os.path.dirname(__file__)),
         "src", "camoufox_reverse_mcp", "hooks"
     )
-    with open(os.path.join(hooks_dir, "cookie_hook.js"), "r") as f:
+    with open(os.path.join(hooks_dir, "cookie_hook.js"), "r", encoding="utf-8") as f:
         content = f.read()
     assert "getPrototypeOf" in content
     assert "getOwnPropertyDescriptor" in content
@@ -221,7 +221,7 @@ def test_runtime_probe_covers_key_apis():
         os.path.dirname(os.path.dirname(__file__)),
         "src", "camoufox_reverse_mcp", "hooks"
     )
-    with open(os.path.join(hooks_dir, "runtime_probe.js"), "r") as f:
+    with open(os.path.join(hooks_dir, "runtime_probe.js"), "r", encoding="utf-8") as f:
         content = f.read()
     assert "XMLHttpRequest" in content
     assert "fetch" in content
@@ -259,7 +259,7 @@ def test_all_65_tools_registered():
     from camoufox_reverse_mcp.server import mcp
     tools = mcp._tool_manager.list_tools()
     tool_names = [t.name for t in tools]
-    assert 25 <= len(tools) <= 40, f"Expected 25-40 tools, got {len(tools)}: {tool_names}"
+    assert 25 <= len(tools) <= 50, f"Expected 25-50 tools, got {len(tools)}: {tool_names}"
 
 
 def test_new_tools_registered():

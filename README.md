@@ -134,16 +134,16 @@ uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-revers
 
 ## 工具
 
-共 39 个工具，分 9 类。参数说明和使用场景见[工具参考](docs/TOOLS.md)。
+共 41 个工具，分 9 类。参数说明和使用场景见[工具参考](docs/TOOLS.md)。
 
 | 类别 | 数量 | 用途 |
 |---|---:|---|
 | [浏览器控制](docs/TOOLS.md#浏览器控制) | 10 | 启动、导航、截图、快照、点击、输入 |
-| [JS 执行与调试](docs/TOOLS.md#js-执行与调试) | 1 | 在隔离上下文或页面主世界执行 JS |
+| [JS 执行与调试](docs/TOOLS.md#js-执行与调试) | 2 | 在主世界执行 JS、录制可在 trace viewer 回放的会话 |
 | [脚本分析](docs/TOOLS.md#脚本分析) | 2 | 列出、读取、保存脚本，搜索代码 |
 | [Hook 与追踪](docs/TOOLS.md#hook-与追踪) | 5 | 函数 Hook 和 Trace、预置 Hook、控制台日志 |
 | [网络分析](docs/TOOLS.md#网络分析) | 8 | 抓包、拦截、发起调用栈、请求对比、导出 |
-| [JSVMP 逆向分析](docs/TOOLS.md#jsvmp-逆向分析) | 3 | 运行时探针、源码插桩、环境指纹采集 |
+| [JSVMP 逆向分析](docs/TOOLS.md#jsvmp-逆向分析) | 4 | 运行时探针、源码插桩、状态级深挖、环境指纹采集 |
 | [Cookie 与存储](docs/TOOLS.md#cookie-与存储) | 4 | Cookie、Storage、浏览器状态导入导出 |
 | [验证与环境](docs/TOOLS.md#验证与环境) | 3 | 离线验签、环境自检、残留清理 |
 | [引擎层属性追踪](docs/TOOLS.md#引擎层属性追踪) | 3 | Gecko 原生属性追踪，需要定制版浏览器 |

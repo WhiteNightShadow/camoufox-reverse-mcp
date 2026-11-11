@@ -70,6 +70,8 @@
 |------|-------------|
 | `hook_jsvmp_interpreter` | JSVMP runtime probe in the page main world (`mode="proxy"` full coverage / `mode="transparent"` replaces getters only, fewer changes); read the log with `evaluate_js("window.__mcp_jsvmp_log \|\| []", world="main")` |
 | `instrumentation(action)` | Source-level instrumentation: `install` / `log` / `stop` / `reload` / `status` |
+| `stage_break(action)` | State-level deep capture for `tap_stage_calls`: `set` records a bounded deep snapshot for one state `p` (`args_only`/`args_ret`/`args_ret_stack`), `clear` disarms, `list` shows hit counters; emits `tap_stage_break` events |
+| `trace_session(action)` | Playwright trace recording: `start` (screenshots/snapshots/sources), `stop` writes a `.zip` you can open in trace.playwright.dev, `status` reports state. Firefox has no CDP, so this is the only replay-style debugging path |
 | `compare_env` | Collect browser env fingerprint for Node.js/jsdom comparison |
 
 Set `include_source_site=True` when browser and sandbox traces need stable
