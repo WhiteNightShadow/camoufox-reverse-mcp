@@ -47,6 +47,7 @@ CASES = {
     'bare_strict_this': ("function fn(){'use strict'; return this === undefined;}", 'result = fn();'),
     'program_strict': ('', "'use strict'; function fn(){ return this === undefined; } result = fn();"),
     'strict_directive_asi': ('', "'use strict'\nfunction fn(){ return this === undefined; } result = fn();"),
+    'leading_string_continues_next_line': ("var obj={x:'k'};", '"a,b"\n.split(",").forEach(function(k){ hits.push(k); });\nresult = obj.x;'),
     'method_getter_order': ("var obj={get m(){hits.push('get'); return function(x){hits.push(this===obj?'this':'bad-this'); return x;};}}; function arg(){hits.push('arg'); return 6;}", 'result = obj.m(arg());'),
     'method_getter_throw': ("var sentinel={}; var obj={get m(){hits.push('get'); throw sentinel;}}; function arg(){hits.push('arg'); return 6;}", 'try { obj.m(arg()); } catch(e) { result = e === sentinel; }'),
     'method_mutated_by_arg': ("var obj={m:function(){return 'original';}}; function arg(){obj.m=function(){return 'replacement';};}", 'result = obj.m(arg());'),

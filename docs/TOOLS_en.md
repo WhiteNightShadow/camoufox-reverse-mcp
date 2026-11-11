@@ -187,7 +187,9 @@ a locally emulated run can be aligned state by state:
 ```
 
 `tap_stage_calls` is a literal match: it is independent of `mode`/`filter_*` and still
-applies when the file cannot be parsed (`stats.stage_only=true` means stage taps only).
+applies when the file cannot be parsed (`last_mode_used` in `instrumentation(action="status")`
+then ends with `(stage taps only)` and `last_error` holds the parse error). Events are
+recorded when a state returns, so nested states come first; a state that throws is not recorded.
 
 ### Scenario 3: Verify Signing Code
 

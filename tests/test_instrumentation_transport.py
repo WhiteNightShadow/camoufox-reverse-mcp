@@ -83,3 +83,20 @@ async def test_log_targets_selected_frame_main_world(monkeypatch):
     result=await instrumentation.instrumentation('log',frame_name='worker',clear=True)
     assert result['total_entries']==1 and result['world']=='main' and result['frame']['index']==1
     assert all(call.args[0] is child and call.args[2]=='main' for call in execute.call_args_list)
+
+
+async def test_stage_only_rewrite_is_visible_in_status(harness, monkeypatch):
+    from camoufox_reverse_mcp.utils import js_parser
+
+    def unparseable(source, locations=False):
+        raise ValueError("parser unavailable")
+
+    monkeypatch.setattr(js_parser, "parse_source", unparseable)
+    await instrumentation.instrumentation("install", url_pattern="**/stage.js", tap_stage_calls=True)
+    r = route(b"function d(){return l.apply(this,[7].concat(Array.prototype.slice.call(arguments)));}")
+    r.request.url = "https://example.test/stage.js"
+    await harness.handler(r)
+    assert "__mcp_tap_stage(7, l, this, arguments" in r.fulfill.call_args.kwargs["body"]
+    status = next(p for p in instrumentation._get_status()["active_patterns"] if p["pattern"] == "**/stage.js")
+    assert status["last_mode_used"] == "ast (stage taps only)"
+    assert "parser unavailable" in status["last_error"]

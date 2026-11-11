@@ -102,10 +102,11 @@ async def instrumentation(
         tap_stage_calls: For "install" — rewrite the flattened-VMP dispatcher
             shape `return fn.apply(this, [<int>].concat(Array.prototype.slice
             .call(arguments)))` into per-state `tap_stage` events (state id `p`,
-            argc, first args previews, return preview). This is a literal match,
-            so it also works when the rest of the file is not parseable, and it
-            is independent of `mode`/`filter_*`. Use it to compare a VM's state
-            sequence between a real browser and an emulated environment.
+            argc, first args previews, return preview), pushed when the state
+            returns. This is a literal match, so it also works when the rest of
+            the file is not parseable (status then shows "(stage taps only)"),
+            and it is independent of `mode`/`filter_*`. Use it to compare a VM's
+            state sequence between a real browser and an emulated environment.
         include_source_site: For "install" — attach a stable site_id and
             monotonic seq to tap events, plus an original-source range map in
             the log response. Default False.
@@ -331,6 +332,10 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
                     stats["last_skip_reason"] = rewrite_stats.get("skipped_reason", "no_eligible_rewrites")
                     await route.fulfill(status=resp.status, headers=headers, body=body_bytes)
                     return
+                if rewrite_stats.get("stage_only"):
+                    # The parser could not read this file; only stage taps were added.
+                    mode_used = f"{mode_used} (stage taps only)"
+                    stats["last_error"] = rewrite_stats.get("error")
                 if include_source_site:
                     for site in rewrite_stats.get("source_sites", []):
                         metadata = {**site, "source_id": rewrite_stats.get("source_id"),
@@ -412,7 +417,7 @@ async def _get_log(tag_filter, type_filter, key_filter, limit, clear, frame_url=
                     if key_filter in (d.get("key") or "")
                     or key_filter in (d.get("method") or "")
                     or key_filter in (d.get("name") or "")
-                    or key_filter in str(d.get("p") or "")]
+                    or (d.get("p") is not None and key_filter in str(d.get("p")))]
 
         key_count: dict[str, int] = {}
         method_count: dict[str, int] = {}

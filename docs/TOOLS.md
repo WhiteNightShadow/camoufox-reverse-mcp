@@ -169,7 +169,8 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
 ```
 
 要点：`tap_stage_calls` 是**字面量匹配**，与 `mode`/`filter_*` 无关，文件解析失败时仍然生效
-（此时 `stats.stage_only=true`，表示只做了阶段插桩）。
+（此时 `instrumentation(action="status")` 的 `last_mode_used` 带 `(stage taps only)`，`last_error` 是解析失败原因）。
+事件在状态返回时记录，嵌套的状态排在前面；抛异常的状态不记录。
 
 ### 场景 3：验证协议代码
 

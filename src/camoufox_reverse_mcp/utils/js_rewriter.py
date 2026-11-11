@@ -127,7 +127,8 @@ INSTRUMENT_RUNTIME = r"""
   window.__mcp_tap_method = function(obj, key, args, tag, siteId){
     return window.__mcp_prepare_method(obj, key, tag, siteId)(args);
   };
-  // Dispatcher-level tap: per-state enter/leave evidence for flattened VMPs.
+  // Dispatcher-level tap for flattened VMPs: one event per state, pushed when
+  // the state returns (nested states first; a state that throws is not logged).
   // Arguments are copied before the call so the trace keeps the original list.
   window.__mcp_tap_stage = function(p, fn, thisArg, args, tag, siteId){
     var list = apply(slice, args, [0]);
@@ -214,11 +215,11 @@ def build_source_site(source_id: str, kind: str, start: int, end: int) -> dict:
 
 # Control-flow-flattened JSVMP dispatchers funnel every state through a single
 # call shape, e.g. ``return l.apply(this, [9425].concat(Array.prototype.slice
-# .call(arguments)))``. Rewriting that shape gives per-state enter/leave events
-# (state id ``p``) without touching the dispatcher body, which is usually the
-# most useful evidence when a VM must be matched stage-by-stage.
+# .call(arguments)))``. Rewriting that shape gives one event per state (state id
+# ``p``) without touching the dispatcher body, which is usually the most useful
+# evidence when a VM must be matched stage-by-stage.
 _STAGE_CALL_RE = re.compile(
-    r"return\s+(?P<fn>[A-Za-z_$][A-Za-z0-9_$]*)\.apply\(\s*this\s*,\s*"
+    r"(?<![\w$.])return\s+(?P<fn>[A-Za-z_$][A-Za-z0-9_$]*)\.apply\(\s*this\s*,\s*"
     r"\[\s*(?P<p>\d+)\s*\]\s*\.concat\(\s*"
     r"Array\.prototype\.slice\.call\(\s*arguments\s*\)\s*\)\s*\)"
 )
@@ -226,19 +227,86 @@ _STAGE_CALL_RE = re.compile(
 _LEADING_STRING_RE = re.compile(
     rf"{_TRIVIA}(?:{_STRING}){_TRIVIA}(?:;|(?=\r?\n|$))"
 )
+_TRIVIA_RE = re.compile(_TRIVIA)
+# A line break only ends a string statement when the next token cannot continue
+# the expression: '"a"\n.split(",")' is one statement, not a directive.
+_CONTINUES_EXPRESSION_RE = re.compile(
+    r"[.\[(`*/%<>=&|^?,:]|!=|([+-])(?!\1)|in(?![\w$])|instanceof(?![\w$])"
+)
+
+
+def shebang_end(src: str) -> int:
+    """Return the offset just past a leading ``#!`` line."""
+    if not src.startswith("#!"):
+        return 0
+    newline = src.find("\n")
+    return len(src) if newline == -1 else newline + 1
 
 
 def directive_end(src: str) -> int:
-    """Return the offset just past a leading directive prologue (best effort)."""
-    pos = 0
-    if src.startswith("#!"):
-        newline = src.find("\n")
-        pos = len(src) if newline == -1 else newline + 1
+    """Return the offset just past a leading directive prologue.
+
+    Best effort, for sources the parser cannot read; parsed sources take the
+    prologue from the AST instead.
+    """
+    pos = shebang_end(src)
     while True:
         match = _LEADING_STRING_RE.match(src, pos)
         if match is None:
             return pos
+        if not match.group().endswith(";"):
+            following = _TRIVIA_RE.match(src, match.end()).end()
+            if _CONTINUES_EXPRESSION_RE.match(src, following):
+                return pos
         pos = match.end()
+
+
+def stage_call_edits(
+    src: str,
+    tag: str = "vmp",
+    max_rewrites: int = 20000,
+    include_source_site: bool = False,
+    source_id: str = "",
+    allowed_starts: set[int] | None = None,
+) -> list[dict]:
+    """Find dispatcher entry calls and build their ``__mcp_tap_stage`` edits.
+
+    Only the exact ``return fn.apply(this, [<int>].concat(...arguments))`` shape
+    is matched. ``allowed_starts`` keeps only matches at those offsets, i.e. the
+    starts of real return statements when the source could be parsed.
+    """
+    if include_source_site and not source_id:
+        source_id, _ = source_identity(src)
+    edits: list[dict] = []
+    for match in _STAGE_CALL_RE.finditer(src):
+        if len(edits) >= max_rewrites:
+            break
+        start, end = match.span()
+        if allowed_starts is not None and start not in allowed_starts:
+            continue
+        site = None
+        site_arg = ""
+        if include_source_site:
+            site = build_source_site(source_id, "tap_stage", start, end)
+            site_arg = ", " + json.dumps(site["site_id"])
+        edits.append({
+            "start": start, "end": end, "call_start": match.start("fn"), "site": site,
+            "replacement": (f"return __mcp_tap_stage({match.group('p')}, {match.group('fn')}, "
+                            f"this, arguments, {json.dumps(tag)}{site_arg})"),
+        })
+    return edits
+
+
+def apply_stage_edits(src: str, edits: list[dict]) -> str:
+    """Apply edits from :func:`stage_call_edits` (sorted, non-overlapping)."""
+    parts: list[str] = []
+    pos = 0
+    for edit in edits:
+        parts.append(src[pos:edit["start"]])
+        parts.append(edit["replacement"])
+        pos = edit["end"]
+    parts.append(src[pos:])
+    return "".join(parts)
 
 
 def rewrite_stage_calls(
@@ -253,28 +321,8 @@ def rewrite_stage_calls(
     Only the exact ``return fn.apply(this, [<int>].concat(...arguments))`` shape
     is matched; every other call site is left byte-for-byte unchanged.
     """
-    edits: list[tuple[int, int, str]] = []
-    source_sites: list[dict] = []
-    if include_source_site and not source_id:
-        source_id, _ = source_identity(src)
-    for match in _STAGE_CALL_RE.finditer(src):
-        if len(edits) >= max_rewrites:
-            break
-        start, end = match.span()
-        state, fn = match.group("p"), match.group("fn")
-        site_arg = ""
-        if include_source_site:
-            site = build_source_site(source_id, "tap_stage", start, end)
-            source_sites.append(site)
-            site_arg = ", " + json.dumps(site["site_id"])
-        edits.append((
-            start, end,
-            f"return __mcp_tap_stage({state}, {fn}, this, arguments, {json.dumps(tag)}{site_arg})",
-        ))
-    for start, end, replacement in reversed(edits):
-        src = src[:start] + replacement + src[end:]
-    return src, len(edits), source_sites
-
+    edits = stage_call_edits(src, tag, max_rewrites, include_source_site, source_id)
+    return apply_stage_edits(src, edits), len(edits), [e["site"] for e in edits if e["site"]]
 
 
 def _rewrite_member_access(
@@ -324,9 +372,11 @@ def regex_rewrite(src: str, tag: str = "vmp",
     Unrecognized programs are returned byte-for-byte, without a preamble. In
     particular modern syntax parse failures do not trigger heuristic rewrites.
 
-    ``tap_stage_calls`` is independent of the simple-statement whitelist: the
-    dispatcher call shape is matched literally and does not depend on the rest
-    of the program being parseable.
+    ``tap_stage_calls`` matches the dispatcher call shape literally in programs
+    outside the simple-statement whitelist. A whitelisted program has no
+    functions, so a match there is text inside a string and is left alone.
+    Without a parser, a match inside a string literal elsewhere is rewritten
+    too; ``ast_rewrite`` checks matches against the parsed program instead.
     """
     statements = _simple_statements(src)
     stats = {"member_access_rewrites": 0, "stage_rewrites": 0,
@@ -345,7 +395,7 @@ def regex_rewrite(src: str, tag: str = "vmp",
             include_source_site=include_source_site, source_id=source_id,
         )
         stats["member_access_rewrites"] = n
-    if tap_stage_calls:
+    if tap_stage_calls and statements is None:
         new_src, n, stage_sites = rewrite_stage_calls(
             new_src, tag, max_rewrites,
             include_source_site=include_source_site, source_id=source_id,

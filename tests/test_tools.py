@@ -433,3 +433,32 @@ async def test_close_browser_clears_instrumentation_routes_and_sites(monkeypatch
     assert context.unrouted == ["**/vmp.js"]
     assert instrumentation._active_routes == {}
     assert instrumentation._source_site_registry == {}
+
+
+@pytest.mark.asyncio
+async def test_instrumentation_log_counts_stages_and_filters_state_zero(monkeypatch):
+    from camoufox_reverse_mcp.tools import instrumentation
+
+    entries = [
+        {"type": "tap_stage", "tag": "vmp", "p": 0, "argc": 0, "args": [], "ret": "1"},
+        {"type": "tap_stage", "tag": "vmp", "p": 9425, "argc": 1, "args": ["a"], "ret": "2"},
+        {"type": "tap_stage", "tag": "vmp", "p": 9425, "argc": 1, "args": ["b"], "ret": "3"},
+        {"type": "tap_get", "tag": "vmp", "key": "userAgent"},
+    ]
+
+    class FakePage:
+        async def evaluate(self, expression):
+            if "__mcp_vmp_log" in expression:
+                return list(entries)
+            raise AssertionError(f"unexpected evaluate: {expression}")
+
+    async def get_active_page():
+        return FakePage()
+
+    monkeypatch.setattr(instrumentation.browser_manager, "get_active_page", get_active_page)
+    monkeypatch.setattr(instrumentation, "_active_routes", {})
+
+    result = await instrumentation._get_log(None, None, None, 500, False)
+    assert result["summary"]["hot_stages"] == {"9425": 2, "0": 1}
+    zero = await instrumentation._get_log(None, "tap_stage", "0", 500, False)
+    assert [e["p"] for e in zero["entries"]] == [0]

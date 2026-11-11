@@ -15,14 +15,18 @@ Usage:
 from __future__ import annotations
 
 import json
+import re
+from bisect import bisect_right
 from typing import Any, Callable
 
 from .js_rewriter import (  # reuse the same runtime preamble
     INSTRUMENT_RUNTIME,
+    apply_stage_edits,
     build_source_site,
     directive_end,
-    rewrite_stage_calls,
+    shebang_end,
     source_identity,
+    stage_call_edits,
 )
 
 
@@ -55,6 +59,49 @@ _SKIP_CALLEE_NAMES = frozenset({
     '__mcp_prepare_method', '__mcp_tap_stage',
     'require', 'eval',
 })
+
+
+_LINE_BREAK_RE = re.compile(r"\r\n|[\r\n\u2028\u2029]")
+
+
+def _return_starts(tree: Any) -> set[int]:
+    starts: set[int] = set()
+
+    def visit(node, parent):
+        if node.type == 'ReturnStatement':
+            starts.add(node.range[0])
+
+    _walk(tree, None, visit)
+    return starts
+
+
+def _stage_offset_mapper(stage_edits: list[dict]) -> Callable[[int], int]:
+    """Map an offset in the stage-rewritten text back to the original text."""
+    spans = []
+    shift = 0
+    for edit in stage_edits:
+        new_start = edit["start"] + shift
+        spans.append((new_start, new_start + len(edit["replacement"]), edit))
+        shift += len(edit["replacement"]) - (edit["end"] - edit["start"])
+    new_starts = [span[0] for span in spans]
+
+    def to_original(offset: int) -> int:
+        index = bisect_right(new_starts, offset) - 1
+        if index < 0:
+            return offset
+        new_start, new_end, edit = spans[index]
+        if offset >= new_end:
+            return edit["end"] + offset - new_end
+        # Only the return statement and the wrapped call start inside a stage
+        # replacement; the call stands for the original ``fn.apply(...)``.
+        return edit["start"] if offset == new_start else edit["call_start"]
+
+    return to_original
+
+
+def _line_column(line_starts: list[int], offset: int) -> tuple[int, int]:
+    line = bisect_right(line_starts, offset)
+    return line, offset - line_starts[line - 1]
 
 
 def ast_rewrite(
@@ -90,41 +137,67 @@ def ast_rewrite(
         "skipped": 0, "overlap_skipped": 0,
     }
 
-    # Dispatcher taps run before the AST pass: the rewrite is a literal match of
-    # one call shape, so it does not depend on esprima understanding modern
-    # syntax, and member/call taps then see stable offsets in the same source.
-    stage_sites: list[dict] = []
-    if tap_stage_calls:
-        stage_source_id = ""
-        if include_source_site:
-            stage_source_id, _ = source_identity(src)
-        src, stage_edits, stage_sites = rewrite_stage_calls(
-            src, tag, max_edits,
-            include_source_site=include_source_site, source_id=stage_source_id,
-        )
-        stats["stage_edits"] = stage_edits
+    original = src
+    source_id = ""
+    source_sha256 = ""
+    if include_source_site:
+        source_id, source_sha256 = source_identity(original)
 
+    # Dispatcher taps are a literal match of one call shape, applied before the
+    # AST pass so they do not depend on the parser. Member/call taps are then
+    # found in the rewritten text, and their source sites are mapped back.
+    stage_edits: list[dict] = []
+    if tap_stage_calls:
+        stage_edits = stage_call_edits(original, tag, max_edits, include_source_site, source_id)
+        src = apply_stage_edits(original, stage_edits)
+
+    tree = None
     try:
         tree, parser_backend = parse_source(src, locations=include_source_site)
-        stats["parser_backend"] = parser_backend
-        stats["source_type"] = getattr(tree, "sourceType", "script")
-        stats["parsed"] = True
     except Exception as e:
         stats["error"] = f"parse_failed: {type(e).__name__}: {e}"
-        if not stats["stage_edits"]:
+    if tree is None and stage_edits:
+        # A match inside a string literal breaks a file that parses. When the
+        # original parses, keep only matches that are real return statements.
+        try:
+            original_tree, original_backend = parse_source(
+                original, locations=include_source_site)
+        except Exception:
+            original_tree = None
+        if original_tree is not None:
+            stage_edits = stage_call_edits(
+                original, tag, max_edits, include_source_site, source_id,
+                allowed_starts=_return_starts(original_tree))
+            src = apply_stage_edits(original, stage_edits)
+            tree, parser_backend = original_tree, original_backend
+            if stage_edits:
+                try:
+                    tree, parser_backend = parse_source(src, locations=include_source_site)
+                except Exception:
+                    # Never ship a rewrite that broke a file the parser accepts.
+                    stage_edits, src = [], original
+            stats.pop("error", None)
+    stats["stage_edits"] = len(stage_edits)
+    stage_sites = [edit["site"] for edit in stage_edits if edit["site"]]
+    if tree is None:
+        if not stage_edits:
             return None, stats
         # Stage taps are literal rewrites, so they stay usable even when the
         # parser cannot handle this file. Report the reduced scope explicitly.
-        stats["edits"] = stats["stage_edits"]
+        stats["edits"] = len(stage_edits)
         stats["stage_only"] = True
-        insert_at = directive_end(src)
         if include_source_site:
             stats.update({
+                "source_id": source_id,
+                "source_sha256": source_sha256,
                 "source_sites": stage_sites,
-                "source_id": source_identity(src)[0],
             })
+        insert_at = directive_end(src)
         return (src[:insert_at] + ";\n" + INSTRUMENT_RUNTIME + "\n"
                 + src[insert_at:]), stats
+    stats["parser_backend"] = parser_backend
+    stats["source_type"] = getattr(tree, "sourceType", "script")
+    stats["parsed"] = True
 
     edits: list[dict] = []
     # A MemberExpression can be an assignment reference several pattern levels
@@ -168,14 +241,20 @@ def ast_rewrite(
     tag_lit = json.dumps(tag)
     prop_filter = set(filter_property_names) if filter_property_names else None
     obj_filter = set(filter_object_names) if filter_object_names else None
-    source_id = ""
-    source_sha256 = ""
-    if include_source_site:
-        source_id, source_sha256 = source_identity(src)
+    to_original = _stage_offset_mapper(stage_edits) if stage_edits else None
+    line_starts = ([0] + [m.end() for m in _LINE_BREAK_RE.finditer(original)]
+                   if include_source_site and stage_edits else [])
 
     def site_for(node, kind: str, node_range: list[int]) -> dict | None:
         if not include_source_site:
             return None
+        if to_original is not None:
+            # Ranges come from the stage-rewritten text; report original ones.
+            start, end = to_original(node_range[0]), to_original(node_range[1])
+            site = build_source_site(source_id, kind, start, end)
+            site["line"], site["column"] = _line_column(line_starts, start)
+            site["end_line"], site["end_column"] = _line_column(line_starts, end)
+            return site
         site = build_source_site(source_id, kind, node_range[0], node_range[1])
         loc = getattr(node, 'loc', None)
         if loc is not None:
@@ -401,7 +480,9 @@ def ast_rewrite(
 
     stats["edits"] = len(edits) + stats["stage_edits"]
     # Keep the original directive prologue active (also when terminated by ASI).
-    directive_at = directive_end(src)
+    # Only the parser knows where it ends; edits never touch a shebang or
+    # directive, so these offsets are the same in ``out``.
+    directive_at = shebang_end(src)
     for statement in tree.body:
         expr = getattr(statement, 'expression', None)
         # esprima-python drops directive annotations after an empty string.
