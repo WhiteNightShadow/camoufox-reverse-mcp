@@ -4,6 +4,14 @@
 
 Full notes for v1.1.1 and later are in [docs/releases](docs/releases) (Chinese). Packages are on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases).
 
+## v1.9.4 (2026-11-10) — Stage Taps for Flattened VMPs
+
+- `instrumentation(action="install")` adds `tap_stage_calls` (off by default). It rewrites the dispatcher calls of control-flow-flattened JSVMPs into per-state `tap_stage` events without changing call results; `action="log"` adds `hot_stages` counts and can filter by state id
+- Stage taps still apply when a file cannot be parsed, and `last_mode_used` in the status then shows `ast (stage taps only)`. When a file parses, only real return statements are rewritten. With `include_source_site`, stage and regular tap sites point into the original script
+- Thanks to [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) for contributing the feature (#18)
+
+See the [Chinese release notes](docs/releases/v1.9.4.md).
+
 ## v1.9.3 (2026-11-10) — JSVMP Probe Fix
 
 - The probes from `hook_jsvmp_interpreter` and `navigate(pre_inject_hooks=["jsvmp_probe"])` now run in the page main world. They used to run in the isolated world and recorded nothing from page scripts. Read the log with `evaluate_js("window.__mcp_jsvmp_log || []", world="main")`

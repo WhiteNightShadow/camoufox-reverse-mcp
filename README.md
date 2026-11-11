@@ -77,8 +77,8 @@ python -m camoufox fetch
 先安装 [uv](https://docs.astral.sh/uv/getting-started/installation/) 和 git，再在终端各运行一次：
 
 ```bash
-uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.3" camoufox-reverse-mcp --version
-uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.3" camoufox fetch
+uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.4" camoufox-reverse-mcp --version
+uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.4" camoufox fetch
 ```
 
 第一条下载依赖并确认版本，可以避免客户端首次启动时等待超时。第二条下载浏览器，保存在用户缓存目录，不随 uvx 环境清理。
@@ -92,7 +92,7 @@ uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.3",
+        "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.4",
         "camoufox-reverse-mcp"
       ]
     }
@@ -103,18 +103,18 @@ uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.
 Claude Code 也可以用一条命令添加：
 
 ```bash
-claude mcp add --scope user camoufox-reverse -- uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.3" camoufox-reverse-mcp
+claude mcp add --scope user camoufox-reverse -- uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.4" camoufox-reverse-mcp
 ```
 
 <details>
 <summary>更新版本与常驻安装</summary>
 
-**更新版本**：在 [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases) 查看最新标签，把配置里的 `@v1.9.3` 改成新标签，再重启客户端。标签是固定的，不改就不会变。去掉 `@v1.9.3` 会在每次启动时跟随 main 的最新提交，不建议在日常使用时这样配置。如果 `check_environment` 提示缺少浏览器，用新标签再运行一次 `camoufox fetch`。
+**更新版本**：在 [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases) 查看最新标签，把配置里的 `@v1.9.4` 改成新标签，再重启客户端。标签是固定的，不改就不会变。去掉 `@v1.9.4` 会在每次启动时跟随 main 的最新提交，不建议在日常使用时这样配置。如果 `check_environment` 提示缺少浏览器，用新标签再运行一次 `camoufox fetch`。
 
 **常驻安装**：配置里的 `command` 写 `camoufox-reverse-mcp`，不需要 `args`。浏览器仍用上面的 `uvx ... camoufox fetch` 下载，两种方式共用同一份浏览器。
 
 ```bash
-uv tool install "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.3"
+uv tool install "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.9.4"
 uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@<新标签>"
 ```
 
@@ -182,9 +182,9 @@ uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-revers
 
 ## 更新记录
 
+- **v1.9.4**（2026-11-10）：`instrumentation` 新增 `tap_stage_calls`，按状态记录平坦化 VMP 的分发调用，方便和本地补环境逐段对照。[详情](docs/releases/v1.9.4.md)
 - **v1.9.3**（2026-11-10）：`hook_jsvmp_interpreter` 改装到页面主世界，能记录页面脚本；proxy 模式不再无限递归。[详情](docs/releases/v1.9.3.md)
 - **v1.9.2**（2026-11-10）：`hook_jsvmp_interpreter` 的 `script_url` 不会再被当成代码执行。[详情](docs/releases/v1.9.2.md)
-- **v1.9.1**（2026-11-06）：修复 `launch_browser` 覆盖启动参数的问题。[详情](docs/releases/v1.9.1.md)
 
 全部版本见 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -192,7 +192,7 @@ uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-revers
 
 - [@tuntun1337](https://github.com/tuntun1337) — 严格 JSON Schema 兼容性
 - [@Code-xy](https://github.com/Code-xy) — Windows 引擎追踪问题定位与验证
-- [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP 执行点关联需求与分析材料
+- [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP 执行点关联需求与分析材料，`instrumentation` 的 `tap_stage_calls` 阶段插桩
 - [@dsaw1111](https://github.com/dsaw1111) — Camoufox 152 版本差距与 PropertyTracer 升级需求
 - [@chung1912](https://github.com/chung1912) — `uvx` 安装建议与 `uv tool install` 配置
 - [@tunguyen1993](https://github.com/tunguyen1993) — `hook_jsvmp_interpreter` 的 `script_url` 转义问题与修复建议

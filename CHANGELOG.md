@@ -4,6 +4,14 @@
 
 v1.1.1 起每个版本的完整说明在 [docs/releases](docs/releases)，发布包在 [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases)。
 
+## v1.9.4（2026-11-10）— 平坦化 VMP 阶段插桩
+
+- `instrumentation(action="install")` 新增 `tap_stage_calls`（默认关闭）：把控制流平坦化 JSVMP 的分发调用改写成逐状态的 `tap_stage` 事件，调用结果不变；`action="log"` 新增 `hot_stages` 统计，可以按状态号筛选
+- 文件解析失败时阶段插桩照样生效，状态里的 `last_mode_used` 显示 `ast (stage taps only)`；文件能解析时只改写真正的 return 语句；开 `include_source_site` 时阶段事件和普通 tap 的位置都对应原始脚本
+- 感谢 [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) 贡献这个功能（#18）
+
+详情见 [v1.9.4](docs/releases/v1.9.4.md)。
+
 ## v1.9.3（2026-11-10）— JSVMP 探针修复
 
 - `hook_jsvmp_interpreter` 和 `navigate(pre_inject_hooks=["jsvmp_probe"])` 的探针改装到页面主世界。以前装在隔离世界，页面脚本的读取和调用一条都记录不到；日志改用 `evaluate_js("window.__mcp_jsvmp_log || []", world="main")` 读取
