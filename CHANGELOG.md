@@ -4,6 +4,15 @@
 
 v1.1.1 起每个版本的完整说明在 [docs/releases](docs/releases)，发布包在 [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases)。
 
+## 未发布 — Firefox RDP 断点调试
+
+- 新增 `rdp_debugger(action=...)`：走 Firefox 原生 RDP（`-start-debugger-server`）补齐「真断点 / 单步 / 调用栈 / 作用域 / 暂停中求值 / 请求断点」。Firefox 没有 CDP，Playwright 侧只能事后回放，这个工具解决"停在某一行看局部变量"的需求；`action` 支持 `launch`、`attach`、`enable`、`sources`、`source`、`breakable_lines`、`set_breakpoint`、`wait_paused`、`frames`、`scopes`、`evaluate`、`step`、`resume`、`interrupt`、`reload`、`xhr_breakpoint`、`status`、`close`
+- `evaluate` 可在不暂停的情况下驱动页面自身逻辑（点按钮、调用页面函数），不必再依赖 Playwright 交互；`xhr_breakpoint` 在请求发出前暂停，`fetch` 与 XHR 都命中，适合抓 `data` 这类被混淆代码构造的入参
+- 工具为 `async def`，socket 收发与等待都在 `asyncio.to_thread` 里执行，不会阻塞 MCP 事件循环和 Playwright 那边的浏览器事件
+- 浏览器可执行文件自动探测：`CAMOUFOX_EXE` → camoufox 缓存中最新构建 → 系统 Firefox。只清理本会话自己启动的进程（按临时 profile 精确匹配），端口被占用时直接报错提示换端口，不会去杀其他实例或用户自己开的浏览器
+- 实测记录（camoufox 152 reverse.5 与官方 Firefox）：`thread.attach` 必须带 `options:{}`，否则线程停在 DETACHED、`sources` 恒为 0 且不报错；`setXHRBreakpoint` 的 `method` 必须为 `"ANY"` 或真实方法名，空串永不匹配；导航后 target/thread actor 会全部换新，`reload` 动作会自动重建会话并重下断点
+- `--self-test` 改为 `about:blank` + 注入脚本，不再访问第三方站点；新增协议层单元测试（假 socket 回放 RDP 帧，覆盖分帧、回复匹配、错位错误、`longString` 分片）与默认跳过的浏览器冒烟测试
+
 ## v1.10.0（2026-11-12）— 插桩默认值、离线改写、iframe 日志与 preset 主世界
 
 - `instrumentation`：`rewrite_calls` 默认改为关闭（调用改写会改变 `caller` 和递归深度），`max_file_size` 默认从 200KB 提到 2MB；原样放行和改写数到上限的文件逐个列出原因和建议值；新增 `action="rewrite_source"` 离线改写本地源码；每条事件带 `seq`、平坦化状态里的事件带 `stage`，`log` 支持 `after_seq`、`seq_window`、`stage` 切片并返回 `dropped`（#19 #20 #21 #25）

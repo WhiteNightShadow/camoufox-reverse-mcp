@@ -163,6 +163,55 @@ trace_property_access(action="start")
 trace_property_access(action="stop", mode="summary")
 ```
 
+### Firefox RDP Debugging
+
+> **Why this group exists**: camoufox is Firefox, and the Playwright side runs on
+> Juggler with no CDP, so Playwright cannot stop on a line, read locals, or step.
+> This tool drives Firefox's native RDP (`-start-debugger-server`) directly and
+> fills that gap — no Playwright, no browser extension.
+>
+> Works on Firefox 140+ (verified on camoufox 152 / reverse.5 and stock Firefox).
+> The executable is resolved automatically: `CAMOUFOX_EXE` env var → newest build
+> in the camoufox cache → system Firefox.
+
+> **Security**: the RDP port is unauthenticated. Any local process that can connect
+> to `127.0.0.1:<port>` can execute code with the browser's privileges. Keep it
+> loopback-only, never forward or expose the port. If the port is busy the tool
+> reports an error and asks for another port; it never kills processes it did not
+> start.
+
+| Tool | Description |
+|------|-------------|
+| `rdp_debugger` | One tool with `action` dispatch (18 actions). Every blocking action runs inside `asyncio.to_thread`, so it never stalls the MCP event loop or Playwright's browser events |
+
+`action` reference:
+
+| action | What it does |
+|---|---|
+| launch | Start a browser with a debug port on an isolated profile (busy port -> error, no killing of foreign processes) |
+| attach | Connect to an already running debug port without launching |
+| enable | `listTabs -> getTarget -> threadActor`, then attach the thread; returns tab/target/thread |
+| sources | List known scripts, filterable by `url_substr` |
+| source | Fetch full script source; large scripts come back through longString chunks, optional `save_path` |
+| breakable_lines | Breakable line numbers of a script (check before setting a breakpoint) |
+| set_breakpoint | Set a breakpoint by `sourceId`; requires `line`, supports `column` / `condition` |
+| wait_paused | Wait for the next pause; returns frame / where / why (breakpoint, debuggerStatement, XHR) |
+| frames | Full call stack of the current pause |
+| scopes | Recursive scope chain and bindings of one frame; requires `frame_actor` |
+| evaluate | With `frame_actor`, evaluate in that paused frame (locals readable); without it, global page eval |
+| step | Step `over` / `into` / `out` |
+| resume | Resume execution |
+| interrupt | Pause without a line breakpoint (single-line JSVMP) |
+| reload | Reload and rebuild the session, re-applying every breakpoint (actors are recreated on navigation) |
+| xhr_breakpoint | Pause when a request is about to be sent; matches fetch and XHR; `method="remove"` removes it |
+| status | Session state (port, tab, target, thread, last pause reason, breakpoints) |
+| close | End the session and close the browser this session launched |
+
+Two verified gotchas:
+
+- `thread.attach` must carry `options:{}`, otherwise the thread stays DETACHED, `sources` stays 0 and nothing is reported.
+- `setXHRBreakpoint` requires `method` to be `"ANY"` or a real verb; an empty string never matches.
+
 ## Usage Scenarios
 
 ### Scenario 1: Reverse Engineer Login API Signing

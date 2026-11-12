@@ -139,6 +139,53 @@ launch_browser(
 PID，不会清理或开关其他 MCP 实例。开启 engine trace 时会临时关闭 Firefox
 content sandbox 以允许内容进程写入；普通启动不会改动 sandbox。
 
+### Firefox RDP 断点调试
+
+> **为什么需要这一组**：camoufox 是 Firefox，Playwright 侧走 Juggler，没有 CDP。
+> Playwright 拿不到「停在某一行、看局部变量、单步」。这一组直接开 Firefox 原生
+> RDP（`-start-debugger-server`），把等价能力补齐，全程不经过 Playwright，
+> 也不需要浏览器扩展。
+>
+> 适用 Firefox 140+（camoufox 152 / reverse.5 与官方 Firefox 均验证过）。
+> 可执行文件按 `CAMOUFOX_EXE` 环境变量 → camoufox 缓存里的最新构建 → 系统
+> Firefox 的顺序自动探测。
+
+> **安全**：RDP 端口没有任何认证，能连上 `127.0.0.1:<port>` 的本机进程都可以用
+> 浏览器权限执行代码。只在 127.0.0.1 上使用，不要把端口转发或暴露到外网；
+> 端口被占用时工具会直接报错让你换端口，不会去杀不是自己启动的进程。
+
+| 工具 | 说明 |
+|------|------|
+| `rdp_debugger` | 单个工具 + `action` 分发（18 个动作），所有阻塞动作都在 `asyncio.to_thread` 里执行，不会卡住 MCP 事件循环和 Playwright 那边的浏览器事件 |
+
+`action` 一览：
+
+| action | 作用 |
+|---|---|
+| launch | 启动带调试端口的浏览器（独立 profile；端口占用时报错，不杀别人的进程） |
+| attach | 连到已在运行的调试端口，不新起浏览器 |
+| enable | `listTabs → getTarget → threadActor` 并 attach 线程；返回 tab/target/thread |
+| sources | 列出线程已知脚本，可按 `url_substr` 过滤 |
+| source | 取脚本全文；大脚本自动按 longString 分片取回，可 `save_path` 落盘 |
+| breakable_lines | 某脚本的可断行号（下断点前先查，避免断在不可停位置） |
+| set_breakpoint | 按 `sourceId` 下断点，需要 `line`，支持 `column` / `condition` |
+| wait_paused | 等下一次命中，返回 frame / where / why（breakpoint、debuggerStatement、XHR） |
+| frames | 当前暂停的完整调用栈 |
+| scopes | 某帧的递归作用域链与各层 bindings（变量值），需要 `frame_actor` |
+| evaluate | 给了 `frame_actor` 就在暂停帧内求值（能读局部变量），否则页面全局求值 |
+| step | 单步：`over` / `into` / `out` |
+| resume | 继续运行 |
+| interrupt | 不依赖行断点直接暂停（单行 JSVMP 无从下断时用） |
+| reload | 刷新并自动重建会话 + 重下此前全部断点（导航后 actor 会全部换新） |
+| xhr_breakpoint | 在「请求即将发出」处暂停，fetch 与 XHR 都命中；`method="remove"` 移除 |
+| status | 会话状态（端口、tab、target、thread、最近一次暂停原因、已下断点） |
+| close | 结束会话并关闭本次启动的浏览器 |
+
+两个实测要点：
+
+- `thread.attach` 必须带 `options:{}`，否则线程停在 DETACHED，`sources` 恒为 0 且不报错。
+- `setXHRBreakpoint` 的 `method` 必须是 `"ANY"` 或真实方法名，传空串永不匹配。
+
 ## 使用场景示例
 
 ### 场景 1：逆向登录接口的签名参数

@@ -134,7 +134,7 @@ uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-revers
 
 ## 工具
 
-共 41 个工具，分 9 类。参数说明和使用场景见[工具参考](docs/TOOLS.md)。
+共 42 个工具，分 10 类。参数说明和使用场景见[工具参考](docs/TOOLS.md)。
 
 | 类别 | 数量 | 用途 |
 |---|---:|---|
@@ -144,6 +144,7 @@ uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-revers
 | [Hook 与追踪](docs/TOOLS.md#hook-与追踪) | 5 | 函数 Hook 和 Trace、预置 Hook、控制台日志 |
 | [网络分析](docs/TOOLS.md#网络分析) | 8 | 抓包、拦截、发起调用栈、请求对比、导出 |
 | [JSVMP 逆向分析](docs/TOOLS.md#jsvmp-逆向分析) | 4 | 运行时探针、源码插桩、状态级深挖、环境指纹采集与导出 |
+| [Firefox RDP 断点调试](docs/TOOLS.md#firefox-rdp-断点调试) | 1 | 真断点、单步、调用栈、作用域、暂停中求值、请求断点（走 Firefox 原生 RDP，不需要 CDP） |
 | [Cookie 与存储](docs/TOOLS.md#cookie-与存储) | 4 | Cookie、Storage、浏览器状态导入导出 |
 | [验证与环境](docs/TOOLS.md#验证与环境) | 3 | 离线验签、环境自检、残留清理 |
 | [引擎层属性追踪](docs/TOOLS.md#引擎层属性追踪) | 3 | Gecko 原生属性追踪，需要定制版浏览器 |

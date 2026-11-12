@@ -4,6 +4,15 @@
 
 Full notes for v1.1.1 and later are in [docs/releases](docs/releases) (Chinese). Packages are on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases).
 
+## Unreleased — Firefox RDP debugging
+
+- New `rdp_debugger(action=...)` driving Firefox's native RDP (`-start-debugger-server`) to add real breakpoints, stepping, call stacks, scopes, paused-frame evaluation and request breakpoints. Firefox has no CDP and the Playwright side can only replay after the fact, so this covers "stop on a line and read locals"; `action` accepts `launch`, `attach`, `enable`, `sources`, `source`, `breakable_lines`, `set_breakpoint`, `wait_paused`, `frames`, `scopes`, `evaluate`, `step`, `resume`, `interrupt`, `reload`, `xhr_breakpoint`, `status`, `close`
+- `evaluate` drives page logic without pausing (clicking, calling page functions), so Playwright interaction is no longer required for that; `xhr_breakpoint` pauses right before a request is sent and matches both `fetch` and XHR, which is the practical way to capture payloads built inside obfuscated code
+- The tool is `async def`; socket I/O and waits run inside `asyncio.to_thread`, so the MCP event loop and Playwright's browser events never stall
+- The browser executable is resolved automatically (`CAMOUFOX_EXE` -> newest build in the camoufox cache -> system Firefox). Only processes this session started are cleaned up (matched by the temporary profile); a busy port is reported as an error asking for another port, and foreign instances or the user's own browser are never killed
+- Verified on camoufox 152 reverse.5 and stock Firefox: `thread.attach` must include `options:{}` or the thread stays DETACHED with `sources` permanently 0 and no error; `setXHRBreakpoint` requires `method` to be `"ANY"` or a real verb (an empty string never matches); navigation recreates target/thread actors, and the `reload` action rebuilds the session and re-applies breakpoints
+- `--self-test` now uses `about:blank` plus an injected script instead of a third-party site; added protocol-level unit tests (fake socket replaying RDP frames: framing, reply matching, stale errors, `longString` chunking) and a browser smoke test that is skipped by default
+
 ## v1.10.0 (2026-11-12) — Instrumentation Defaults, Offline Rewrite, Iframe Logs, Presets in the Main World
 
 - `instrumentation`: `rewrite_calls` is now off by default (call taps change `caller` and the recursion depth), and `max_file_size` defaults to 2 MB instead of 200 KB. Files passed through unchanged or capped at `max_rewrites` are listed with reasons and suggested values. New `action="rewrite_source"` rewrites local source without a browser. Every event has a `seq`, events inside a flattened-VMP state carry `stage`, and `log` slices with `after_seq`, `seq_window` and `stage` and reports `dropped` (#19 #20 #21 #25)
