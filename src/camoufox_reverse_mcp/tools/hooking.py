@@ -2,12 +2,23 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from collections import Counter, deque
 
 from ..server import mcp, browser_manager
 from ..utils.frames import list_frame_metadata, persistent_frame_guard, resolve_frame
-from ..utils.worlds import evaluate_in_world, wrapped_main_world_init_script
+from ..utils.jsvmp_hooks import main_world_init_script
+from ..utils.presets import (
+    PRESET_FILES,
+    PRESET_LOGS,
+    PRESET_UNINSTALL,
+    canonical_preset,
+    preset_expression,
+)
+from ..utils.worlds import (
+    evaluate_in_world,
+    native_main_world_available,
+    wrapped_main_world_init_script,
+)
 
 
 _PERSISTENT_WAIT_TIMEOUT_MS = 5000
@@ -944,50 +955,66 @@ async def get_trace_data(
 
 @mcp.tool()
 async def inject_hook_preset(preset: str, persistent: bool = True) -> dict:
-    """Inject a pre-built hook template for common reverse engineering tasks.
+    """Inject a pre-built hook into the page main world.
 
-    Available presets:
-        - "xhr": Hook XMLHttpRequest to log all XHR requests.
-        - "fetch": Hook window.fetch to log all fetch requests.
-        - "crypto": Hook btoa/atob/JSON.stringify to capture encryption I/O.
-        - "websocket": Hook WebSocket to log all WS messages.
-        - "debugger_bypass": Bypass anti-debugging traps.
-        - "cookie": Hook document.cookie writes.
-        - "runtime_probe": Full runtime probe.
+    Presets run where page scripts run (v1.10.0; before, they ran in the
+    isolated world and recorded none of the page's own calls). Page code can
+    detect the replaced functions; remove_hooks() restores them in the
+    current document.
+
+    Available presets (log location in brackets, read it with
+    evaluate_js("window.<name> || []", world="main")):
+        - "xhr": XMLHttpRequest requests [__mcp_xhr_log].
+        - "fetch": fetch requests [__mcp_fetch_log]; get_request_initiator
+          also reads its stacks.
+        - "crypto": btoa/atob/JSON.stringify inputs and outputs [__mcp_crypto_log].
+        - "websocket": WebSocket connections and messages [__mcp_ws_log].
+        - "debugger_bypass": strip `debugger` from Function(...) and timers.
+        - "cookie" (alias "cookie_hook"): document.cookie reads/writes [__mcp_cookie_log].
+        - "runtime_probe": XHR/fetch/canvas/WebGL/navigator/listener calls [__mcp_runtime_log].
 
     Args:
         preset: One of the above preset names.
-        persistent: If True (default), survives page navigation.
+        persistent: True (default) also installs it in every new document,
+            including same-origin iframes; False installs it in the current
+            document only.
 
     Returns:
-        dict with status and the preset name.
+        dict with status, preset, world, execution_backend and read_with.
     """
-    preset_map = {
-        "xhr": "xhr_hook.js",
-        "fetch": "fetch_hook.js",
-        "crypto": "crypto_hook.js",
-        "websocket": "websocket_hook.js",
-        "debugger_bypass": "debugger_trap.js",
-        "cookie": "cookie_hook.js",
-        "runtime_probe": "runtime_probe.js",
-    }
-    if preset not in preset_map:
-        return {"error": f"Unknown preset: {preset}. Available: {list(preset_map.keys())}"}
+    name = canonical_preset(preset)
+    if name is None:
+        return {"error": f"Unknown preset: {preset}. Available: {list(PRESET_FILES)}"}
     try:
-        hooks_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "hooks")
-        hook_file = os.path.join(hooks_dir, preset_map[preset])
-        with open(hook_file, "r", encoding="utf-8") as f:
-            hook_js = f.read()
+        page = await browser_manager.get_active_page()
+        expression = preset_expression(name)
+        install_error = None
+        backend = None
+        info = None
+        backend_warning = None
+        try:
+            info, backend, backend_warning = await evaluate_in_world(
+                page, expression, "main", script_is_function=False)
+        except Exception as e:
+            install_error = e
         if persistent:
-            script_name = f"preset:{preset}"
-            await browser_manager.add_persistent_script(script_name, hook_js)
-            page = await browser_manager.get_active_page()
-            await page.evaluate(hook_js)
-        else:
-            page = await browser_manager.get_active_page()
-            await page.add_init_script(script=hook_js)
-        browser_manager._init_scripts.append(f"preset:{preset}")
-        return {"status": "injected", "preset": preset, "persistent": persistent}
+            native = (backend == "camoufox_native" if backend
+                      else await native_main_world_available(page))
+            await browser_manager.add_persistent_script(
+                f"preset:{name}", main_world_init_script(expression, native=native, label="MCP preset"))
+        browser_manager._init_scripts.append(f"preset:{name}")
+        result = {"status": "injected", "preset": name, "persistent": persistent,
+                  "world": "main", "execution_backend": backend}
+        if name in PRESET_LOGS:
+            result["read_with"] = f'evaluate_js("window.{PRESET_LOGS[name]} || []", world="main")'
+        warnings = [backend_warning] if backend_warning else []
+        if install_error is not None:
+            result["status"] = "partial" if persistent else "failed"
+            warnings.append(f"Install in the current document failed: {install_error}"
+                            + ("; new documents still get it" if persistent else ""))
+        if warnings:
+            result["warnings"] = warnings
+        return result
     except Exception as e:
         return {"error": str(e)}
 
@@ -1048,6 +1075,14 @@ async def remove_hooks(keep_persistent: bool = False) -> dict:
 
         frames = list(getattr(page, "frames", []) or [])
         targets = frames or [page]
+        for index, target in enumerate(targets):
+            try:
+                outcome, _, _ = await evaluate_in_world(target, PRESET_UNINSTALL, "main")
+                labels = outcome.get("restored", []) if isinstance(outcome, dict) else []
+                restored.extend(f"preset:frame[{index}]:{label}" for label in labels)
+            except Exception as e:
+                warnings.append(f"preset uninstall failed (frame[{index}]): {e}")
+                uninstall_incomplete = True
         cancelled_pending = 0
         generic_uninstall = """() => {
             if (typeof window.__mcp_function_uninstall !== 'function')

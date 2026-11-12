@@ -1,57 +1,68 @@
+// Preset "xhr": records XMLHttpRequest calls in window.__mcp_xhr_log.
+// Runs in the page main world inside utils/presets.py PRELUDE.
 (function() {
     if (window.__mcp_xhr_hooked) return;
-    window.__mcp_xhr_hooked = true;
-    window.__mcp_xhr_log = window.__mcp_xhr_log || [];
+    __mcpHide('__mcp_xhr_hooked', true);
+    if (!window.__mcp_xhr_log) __mcpHide('__mcp_xhr_log', []);
 
-    const _origProto = XMLHttpRequest.prototype;
-    const _open = _origProto.open;
-    const _send = _origProto.send;
-    const _setReqHeader = _origProto.setRequestHeader;
+    var _apply = Reflect.apply;
+    var _toTag = Object.prototype.toString;
+    var proto = XMLHttpRequest.prototype;
+    var _open = proto.open;
+    var _send = proto.send;
+    var _setReqHeader = proto.setRequestHeader;
+    var _addListener = EventTarget.prototype.addEventListener;
+    var _now = Date.now;
+    // Per-request state lives here, not in an expando the page could see.
+    var requests = new WeakMap();
+    var _wmGet = WeakMap.prototype.get;
+    var _wmSet = WeakMap.prototype.set;
 
-    const hookedOpen = function(method, url) {
-        this.__mcp_info = { method, url: String(url), headers: {}, timestamp: Date.now() };
-        return _open.apply(this, arguments);
-    };
-    const hookedSetHeader = function(name, value) {
-        if (this.__mcp_info) this.__mcp_info.headers[name] = value;
-        return _setReqHeader.apply(this, arguments);
-    };
-    const hookedSend = function(body) {
-        if (this.__mcp_info) {
-            this.__mcp_info.body = typeof body === 'string' ? body : (body ? String(body).substring(0, 5000) : null);
-            this.__mcp_info.stack = new Error().stack;
-            const info = this.__mcp_info;
-            this.addEventListener('load', function() {
-                info.status = this.status;
-                info.response_length = this.responseText?.length;
-                window.__mcp_xhr_log.push(info);
-                if (window.__mcp_xhr_log.length > 500) window.__mcp_xhr_log.shift();
-            });
-        }
-        return _send.apply(this, arguments);
-    };
-
-    const nativeToString = function(name) {
-        return 'function ' + name + '() { [native code] }';
-    };
-
-    try {
-        Object.defineProperty(_origProto, 'open', {
-            value: hookedOpen, writable: false, configurable: false
-        });
-        Object.defineProperty(_origProto, 'setRequestHeader', {
-            value: hookedSetHeader, writable: false, configurable: false
-        });
-        Object.defineProperty(_origProto, 'send', {
-            value: hookedSend, writable: false, configurable: false
-        });
-    } catch(e) {
-        _origProto.open = hookedOpen;
-        _origProto.setRequestHeader = hookedSetHeader;
-        _origProto.send = hookedSend;
+    function record(info) {
+        var log = window.__mcp_xhr_log;
+        log[log.length] = info;
+        if (log.length > 500) log.splice(0, log.length - 500);
     }
 
-    hookedOpen.toString = function() { return nativeToString('open'); };
-    hookedSetHeader.toString = function() { return nativeToString('setRequestHeader'); };
-    hookedSend.toString = function() { return nativeToString('send'); };
+    var hookedOpen = function open(method, url) {
+        try {
+            _apply(_wmSet, requests, [this, { method: String(method), url: String(url),
+                                              headers: {}, timestamp: _now() }]);
+        } catch (e) {}
+        return _apply(_open, this, arguments);
+    };
+    var hookedSetHeader = function setRequestHeader(name, value) {
+        try {
+            var info = _apply(_wmGet, requests, [this]);
+            if (info) info.headers[String(name)] = String(value);
+        } catch (e) {}
+        return _apply(_setReqHeader, this, arguments);
+    };
+    var hookedSend = function send(body) {
+        try {
+            var info = _apply(_wmGet, requests, [this]);
+            if (info) {
+                info.body = typeof body === 'string' ? body.slice(0, 5000)
+                    : (body == null ? null : '[' + _apply(_toTag, body, []).slice(8, -1) + ']');
+                info.stack = new Error().stack;
+                var xhr = this;
+                // Recorded when sent, so pending and failed requests show up too.
+                record(info);
+                _apply(_addListener, xhr, ['loadend', function () {
+                    try {
+                        info.status = xhr.status;
+                        if (xhr.responseType === '' || xhr.responseType === 'text') {
+                            info.response_length = xhr.responseText.length;
+                        }
+                    } catch (e) {}
+                }]);
+            }
+        } catch (e) {}
+        return _apply(_send, this, arguments);
+    };
+
+    __mcpDefine(proto, 'open', __mcpNative(hookedOpen, 'open'), 'XMLHttpRequest.prototype.open');
+    __mcpDefine(proto, 'setRequestHeader', __mcpNative(hookedSetHeader, 'setRequestHeader'),
+                'XMLHttpRequest.prototype.setRequestHeader');
+    __mcpDefine(proto, 'send', __mcpNative(hookedSend, 'send'), 'XMLHttpRequest.prototype.send');
 })();

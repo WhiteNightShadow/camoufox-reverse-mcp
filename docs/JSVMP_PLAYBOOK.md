@@ -78,6 +78,9 @@ log = await get_instrumentation_log(tag_filter="vmp",
 
 根据 hot_keys / hot_methods / hot_functions 和 `dump_jsvmp_strings` 的 api_names，
 在 Node.js / jsdom 侧复刻环境变量，把 VMP 代码独立跑起来生成有效 cookie。
+v1.10.0 起插桩默认只记成员读取，hot_methods / hot_functions 要在安装时传
+`rewrite_calls=True` 才有；`compare_env(output_path=...)` 导出的环境包可以直接拿来对齐，
+`instrumentation(action="rewrite_source")` 能把同一份改写用在本地源码上。
 
 ### A.5 不要做的事
 

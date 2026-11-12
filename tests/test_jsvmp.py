@@ -126,19 +126,28 @@ def test_source_site_runtime_is_monotonic_and_default_log_is_compatible():
     site_events = execute(True)
 
     assert len(default_events) == len(site_events) == 2
-    assert all("site_id" not in event and "seq" not in event for event in default_events)
-    assert all(set(event) == {"type", "tag", "key", "objType", "value", "ts"}
+    # v1.10.0: every event carries seq; site_id only with include_source_site.
+    assert all("site_id" not in event for event in default_events)
+    assert all(set(event) == {"type", "tag", "key", "objType", "value", "seq", "ts"}
                for event in default_events)
+    assert [event["seq"] for event in default_events] == [0, 1]
     assert [event["seq"] for event in site_events] == [0, 1]
     assert all(event["site_id"] for event in site_events)
 
 
 def test_instrument_runtime_is_valid_js():
-    """INSTRUMENT_RUNTIME should be syntactically valid (basic check)."""
-    assert "window.__mcp_tap_installed" in INSTRUMENT_RUNTIME
-    assert "window.__mcp_tap_get" in INSTRUMENT_RUNTIME
-    assert "window.__mcp_tap_call" in INSTRUMENT_RUNTIME
-    assert "window.__mcp_tap_method" in INSTRUMENT_RUNTIME
+    """INSTRUMENT_RUNTIME defines its helpers on the global object."""
+    for name in ("__mcp_tap_installed", "__mcp_tap_get", "__mcp_tap_call",
+                 "__mcp_tap_method", "__mcp_prepare_method", "__mcp_tap_stage"):
+        assert f"hide(G, '{name}'" in INSTRUMENT_RUNTIME
+    if shutil.which("node") is None:
+        pytest.skip("Node.js is unavailable")
+    script = (INSTRUMENT_RUNTIME + ";process.stdout.write(JSON.stringify(["
+              "typeof __mcp_tap_get, Object.keys(globalThis).filter(k => k.startsWith('__mcp_'))]));")
+    completed = subprocess.run([shutil.which("node"), "-e", script], check=True,
+                               capture_output=True, text=True)
+    # Runs without a window object; the helpers stay out of Object.keys.
+    assert json.loads(completed.stdout) == ["function", []]
 
 
 def test_acorn_template_exists():

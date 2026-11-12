@@ -55,7 +55,7 @@ def proxy_probe(
     return "(" + js + ")()"
 
 
-def main_world_init_script(probe: str, native: bool = True) -> str:
+def main_world_init_script(probe: str, native: bool = True, label: str = "JSVMP") -> str:
     """Init script that installs a probe in the main world of each new document.
 
     native=True (Camoufox launched with main_world_eval): the mw: prefix makes
@@ -80,7 +80,7 @@ def main_world_init_script(probe: str, native: bool = True) -> str:
         f"            info = JSON.parse(window.wrappedJSObject.eval({json.dumps(source)}));\n"
         "        }\n"
         "    } catch (e) {\n"
-        "        console.log('[JSVMP] main-world install failed: ' + (e && e.message));\n"
+        f"        console.log('[{label}] main-world install failed: ' + (e && e.message));\n"
         "        return;\n"
         "    }\n"
         "    if (info && info.banner) console.log(info.banner);\n"

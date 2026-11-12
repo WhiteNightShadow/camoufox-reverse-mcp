@@ -104,8 +104,13 @@ async def stage_break(
                            "depth": depth, "maxItems": max_items})
         script = f"""() => {{
             var spec = {spec};
-            var cfg = window.__mcp_tap_cfg = window.__mcp_tap_cfg ||
-                {{ sampling: 1, tagFilter: null }};
+            var cfg = window.__mcp_tap_cfg;
+            if (!cfg) {{
+                // Same non-enumerable global the instrumentation runtime creates.
+                cfg = {{ sampling: 1, tagFilter: null }};
+                Object.defineProperty(window, '__mcp_tap_cfg',
+                    {{ value: cfg, writable: true, configurable: true, enumerable: false }});
+            }}
             cfg.breaks = cfg.breaks || {{}};
             cfg.breaks[spec.p] = {{ capture: spec.capture, limit: spec.limit,
                                     depth: spec.depth, maxItems: spec.maxItems, hits: 0 }};

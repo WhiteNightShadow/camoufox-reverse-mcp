@@ -41,8 +41,8 @@
 |------|-------------|
 | `hook_function` | Hook or trace a function with main-world, frame, persistence, and late-target support |
 | `get_trace_data` | Read or clear function traces filtered by world and frame |
-| `inject_hook_preset` | One-click preset hooks (xhr / fetch / crypto / websocket / debugger_bypass / cookie / runtime_probe) |
-| `remove_hooks` | Remove all hooks and restore original objects |
+| `inject_hook_preset` | One-click preset hooks (xhr / fetch / crypto / websocket / debugger_bypass / cookie / runtime_probe) in the page main world, so the page's own requests and calls are recorded; read a log as the result's `read_with` shows, e.g. `evaluate_js("window.__mcp_xhr_log \|\| []", world="main")` |
+| `remove_hooks` | Remove all hooks and restore original objects (presets and JSVMP probes included) |
 | `get_console_logs` | Get page console output |
 
 ### Network Analysis
@@ -69,19 +69,40 @@
 
 | Tool | Description |
 |------|-------------|
-| `hook_jsvmp_interpreter` | JSVMP runtime probe in the page main world (`mode="proxy"` full coverage / `mode="transparent"` replaces getters only, fewer changes); read the log with `evaluate_js("window.__mcp_jsvmp_log \|\| []", world="main")` |
-| `instrumentation(action)` | Source-level instrumentation: `install` / `log` / `stop` / `reload` / `status` |
+| `hook_jsvmp_interpreter` | JSVMP runtime probe in the page main world (`mode="proxy"` full coverage / `mode="transparent"` replaces getters only, fewer changes); read the log with `evaluate_js("window.__mcp_jsvmp_log \|\| []", world="main")`. The result's `coverage` lists what the probe records and what it cannot see, so a missing entry means "not observed", not "not called"; events from same-origin iframes (including about:blank ones the page creates and removes) go to the top frame's log with `frame_url`/`frame_depth` |
+| `instrumentation(action)` | Source-level instrumentation: `install` / `log` (slice with `after_seq`, `seq_window`, `stage`) / `stop` / `reload` / `status` (with files passed through unchanged) / `rewrite_source` (rewrite local source without a browser) |
 | `stage_break(action)` | State-level deep capture for `tap_stage_calls`: `set` records a bounded deep snapshot for one state `p` (`args_only`/`args_ret`/`args_ret_stack`), `clear` disarms, `list` shows hit counters; emits `tap_stage_break` events. Armed states last for the MCP session and ship with every script rewritten afterwards, so states that run during page load are captured after a reload; snapshots read own data properties and never call getters |
-| `compare_env` | Collect browser env fingerprint for Node.js/jsdom comparison |
+| `compare_env` | Collect browser env fingerprint for Node.js/jsdom comparison; with `output_path`, export a full environment bundle (navigator, screen, window, CSS, canvas, WebGL, audio, storage, iframe, timing) |
+
+By default only member reads are rewritten (`rewrite_member_access=True`,
+`rewrite_calls=False`). Call taps run every call through MCP helper functions:
+the callee reads `caller` as null, the maximum recursion depth drops and stacks
+gain frames, so fingerprinting code can compute different values. Turn them on
+when `tap_call`/`tap_method` events are needed.
+
+Scripts larger than `max_file_size` (default 2 MB) follow `on_oversized`; by
+default they pass through unchanged unless property filters are set. `status`
+and `log` list them in `skipped_files` with URL, size, reason and a suggested
+`max_file_size`; files that hit `max_rewrites` are listed in `capped_files`.
+
+Every event has a `seq`, numbered across the page and its same-origin child
+frames; events recorded while a `tap_stage_calls` state runs carry it as
+`stage` (the innermost state). `log` pages forward with `after_seq` (returns
+`next_after_seq`), slices with `seq_window=[start, end]` and selects a state's
+events with `stage`; `dropped` counts events lost after the log reached 20000
+entries. Rewritten scripts in same-origin child frames log into the top frame
+with `frame_url`/`frame_depth`, so the events stay after the page removes the iframe.
+
+`instrumentation(action="rewrite_source")` needs no browser: it applies the same
+rewrite to `source` (text) or `source_path` (a file) and writes `output_path`
+(required when the result exceeds ~100 KB). The output runs in Node, vm and
+jsdom too, and events collect in `globalThis.__mcp_vmp_log`.
 
 Set `include_source_site=True` when browser and sandbox traces need stable
-execution-site alignment. Events receive a content-addressed `site_id` and a
-monotonic `seq`; `log` returns a `source_sites` sidecar for the intercepted
-script's original character ranges. This is off by default. It does not guess a
-VM PC, opcode, or pre-protection source location.
-For scripts over 200KB that require a full rewrite, explicitly set
-`on_oversized="force"`; otherwise use property filters and disable
-`rewrite_calls` when call tracing is unnecessary.
+execution-site alignment. Events receive a content-addressed `site_id`;
+`log` returns a `source_sites` sidecar for the intercepted script's original
+character ranges (`rewrite_source` writes `<output_path>.sites.json`). This is
+off by default. It does not guess a VM PC, opcode, or pre-protection source location.
 
 ### Cookies & Storage
 | Tool | Description |
@@ -166,12 +187,12 @@ trace_property_access(action="stop", mode="summary")
 2. network_capture(action="start")
 3. navigate("https://target-site.com/")
 4. list_network_requests(resource_type="script")  ← Find VMP script
-5. instrumentation(action="install", url_pattern="**/vmp_target*.js", mode="ast")
+5. instrumentation(action="install", url_pattern="**/vmp_target*.js", mode="ast")  ← reads only by default
 6. inject_hook_preset("cookie", persistent=True)
 7. instrumentation(action="reload")               ← Activate instrumentation
 8. instrumentation(action="log", type_filter="tap_get")  ← See env reads
-9. instrumentation(action="log", type_filter="tap_method") ← See API calls
-10. compare_env()                                  ← Collect env for Node.js
+9. For API calls: install with rewrite_calls=True, reload, then type_filter="tap_method"
+10. compare_env(output_path="env.json")            ← Export an env bundle for Node.js
 ```
 
 ### Scenario 2b: Stage comparison for control-flow-flattened VMPs
@@ -186,6 +207,11 @@ a locally emulated run can be aligned state by state:
 3. instrumentation(action="log", type_filter="tap_stage")
    → summary.hot_stages counts every state `p`; entries carry argc / args / ret previews
 4. Repeat with the same seed on the other side (local env emulation) and align by p sequence
+5. One stretch only: instrumentation(action="log", seq_window=[590, 610]);
+   what one state read: instrumentation(action="log", stage=<p>);
+   a state's full arguments: stage_break(action="set", p=<p>), then instrumentation(action="reload")
+6. Offline or for many runs: instrumentation(action="rewrite_source", source_path="sdk.js",
+   output_path="sdk.tapped.js", tap_stage_calls=True), then compare in local emulation
 ```
 
 `tap_stage_calls` is a literal match: it is independent of `mode`/`filter_*` and still

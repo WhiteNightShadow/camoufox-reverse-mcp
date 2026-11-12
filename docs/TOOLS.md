@@ -41,8 +41,8 @@
 |------|------|
 | `hook_function` | Hook 或追踪函数；支持主世界、Frame、持久化和动态目标等待 |
 | `get_trace_data` | 读取/清理函数 Trace，按 world 与 Frame 过滤 |
-| `inject_hook_preset` | 一键注入预置 Hook（xhr / fetch / crypto / websocket / debugger_bypass / cookie / runtime_probe） |
-| `remove_hooks` | 移除所有 Hook 并恢复原始对象 |
+| `inject_hook_preset` | 一键注入预置 Hook（xhr / fetch / crypto / websocket / debugger_bypass / cookie / runtime_probe），装在页面主世界，能记到页面自己发的请求和调用；日志用返回值里 `read_with` 的写法读取，例如 `evaluate_js("window.__mcp_xhr_log \|\| []", world="main")` |
+| `remove_hooks` | 移除所有 Hook 并恢复原始对象（含 preset 和 JSVMP 探针） |
 | `get_console_logs` | 获取页面 console 输出 |
 
 ### 网络分析
@@ -69,17 +69,31 @@
 
 | 工具 | 说明 |
 |------|------|
-| `hook_jsvmp_interpreter` | JSVMP 运行时探针，装在页面主世界（`mode="proxy"` 全覆盖 / `mode="transparent"` 只替换 getter，改动较少）；日志用 `evaluate_js("window.__mcp_jsvmp_log \|\| []", world="main")` 读取 |
-| `instrumentation(action)` | 源码级插桩：`install` 注册改写 / `log` 获取日志 / `stop` 停止 / `reload` 重载 / `status` 查看状态 |
+| `hook_jsvmp_interpreter` | JSVMP 运行时探针，装在页面主世界（`mode="proxy"` 全覆盖 / `mode="transparent"` 只替换 getter，改动较少）；日志用 `evaluate_js("window.__mcp_jsvmp_log \|\| []", world="main")` 读取。返回值的 `coverage` 写明能记录和记录不到的范围，日志里没有不等于页面没调用；同源 iframe（包括页面临时建了又删掉的 about:blank）里的事件写进顶层日志，带 `frame_url`/`frame_depth` |
+| `instrumentation(action)` | 源码级插桩：`install` 注册改写 / `log` 获取日志（可按 `after_seq`、`seq_window`、`stage` 切片） / `stop` 停止 / `reload` 重载 / `status` 查看状态和原样放行的文件 / `rewrite_source` 不开浏览器改写本地源码 |
 | `stage_break(action)` | 配合 `tap_stage_calls` 的状态级深挖：`set` 对指定状态 `p` 记录有界深拷贝（`args_only`/`args_ret`/`args_ret_stack`）、`clear` 撤销、`list` 查看命中计数；产出 `tap_stage_break` 事件。布下的状态在本次 MCP 会话内一直有效，之后改写的脚本都带上它，刷新后页面加载阶段执行的状态也能记到；快照只读自有数据属性，不调用 getter |
-| `compare_env` | 浏览器环境指纹收集，用于与 Node.js/jsdom 对比 |
+| `compare_env` | 浏览器环境指纹收集，用于与 Node.js/jsdom 对比；传 `output_path` 导出完整环境包（navigator、screen、window、CSS、canvas、WebGL、audio、storage、iframe、timing） |
+
+默认只改写成员读取（`rewrite_member_access=True`、`rewrite_calls=False`）。调用改写会让每次调用经过 MCP 的辅助函数：
+被调函数读到的 `caller` 变成 null，最大递归深度下降，调用栈多出几层，指纹脚本可能因此算出不同的值。需要 `tap_call`/`tap_method`
+事件时再打开。
+
+超过 `max_file_size`（默认 2MB）的脚本按 `on_oversized` 处理，默认在没有属性过滤时原样放行。`status` 和 `log` 的
+`skipped_files` 逐个列出这些文件的 URL、大小、原因和建议的 `max_file_size`；改写处数到 `max_rewrites` 上限的文件列在
+`capped_files`。
+
+每个事件都带 `seq`，同一页面（含同源子 frame）统一编号；在 `tap_stage_calls` 的状态里发生的事件带 `stage`（最内层的状态号）。
+`log` 用 `after_seq` 往后翻页（返回 `next_after_seq`），用 `seq_window=[起, 止]` 取一段，用 `stage` 取某个状态里的事件；
+日志满 20000 条后丢掉的条数在 `dropped`。同源子 frame 里改写过的脚本写进顶层日志，带 `frame_url`/`frame_depth`，
+页面删掉 iframe 后事件仍在。
+
+`instrumentation(action="rewrite_source")` 不需要浏览器：对 `source`（文本）或 `source_path`（文件）做同样的改写，写到
+`output_path`（改写结果超过约 100KB 时必须给）。改写后的脚本在 Node、vm 和 jsdom 里也能运行，事件在 `globalThis.__mcp_vmp_log`。
 
 需要对齐浏览器与沙箱中的同一执行点时，可在安装时设置
-`include_source_site=True`。事件会增加稳定 `site_id` 与单调 `seq`，`log`
-返回 `source_sites` sidecar，映射到拦截脚本的原始字符区间。该能力默认关闭；
+`include_source_site=True`。事件会增加稳定 `site_id`，`log`
+返回 `source_sites` sidecar，映射到拦截脚本的原始字符区间（`rewrite_source` 写到 `<output_path>.sites.json`）。该能力默认关闭；
 它表示混淆后 JS 的源码位置，不会猜测 VM 的 PC、opcode 或保护前源码位置。
-对超过 200KB 且需要全量改写的脚本，需显式设置 `on_oversized="force"`；
-否则应配合属性过滤并按需关闭 `rewrite_calls` 控制开销。
 
 ### Cookie 与存储
 | 工具 | 说明 |
@@ -149,12 +163,12 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
 2. network_capture(action="start")
 3. navigate("https://target-site.com/")
 4. list_network_requests(resource_type="script")  ← 找到 VMP 脚本
-5. instrumentation(action="install", url_pattern="**/vmp_target*.js", mode="ast")
+5. instrumentation(action="install", url_pattern="**/vmp_target*.js", mode="ast")  ← 默认只记成员读取
 6. inject_hook_preset("cookie", persistent=True)
 7. instrumentation(action="reload")               ← 让插桩生效
 8. instrumentation(action="log", type_filter="tap_get")  ← 看 VMP 读了什么环境
-9. instrumentation(action="log", type_filter="tap_method") ← 看 VMP 调了什么 API
-10. compare_env()                                  ← 收集环境用于 Node.js 补齐
+9. 要看 VMP 调了什么 API：install 时加 rewrite_calls=True，reload 后用 type_filter="tap_method"
+10. compare_env(output_path="env.json")            ← 导出环境包，用于 Node.js 补齐
 ```
 
 ### 场景 2b：控制流平坦化 VMP 的阶段对照
@@ -168,6 +182,11 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
 3. instrumentation(action="log", type_filter="tap_stage")
    → summary.hot_stages 给出每个状态 p 的调用次数，entries 里带 argc / args / ret 预览
 4. 同一份 seed 在另一端（本地补环境）重复一次，按 p 序列和 ret 摘要逐段对齐
+5. 只看一段：instrumentation(action="log", seq_window=[590, 610])；
+   某个状态里读了什么：instrumentation(action="log", stage=<p>)；
+   某个状态的完整参数：stage_break(action="set", p=<p>) 后 instrumentation(action="reload")
+6. 断网或需要反复跑：instrumentation(action="rewrite_source", source_path="sdk.js",
+   output_path="sdk.tapped.js", tap_stage_calls=True)，在本地补环境里执行同样的对照
 ```
 
 要点：`tap_stage_calls` 是**字面量匹配**，与 `mode`/`filter_*` 无关，文件解析失败时仍然生效
@@ -221,8 +240,8 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
 - `trace_property_access`：对当前构建声明的固定 Gecko 原生注入点提供强证据；
   reverse.5 为 77 点，未命中不能证明
   覆盖范围外的属性未被读取，也可能有高负载时间侧信道
-- `compare_env`：采集一组 JS 层环境基线；可通过 `properties` 或分批
-  `evaluate_js` 扩展，不能视为全量枚举
+- `compare_env`：采集一组 JS 层环境基线；`output_path` 导出完整环境包（navigator 全部 getter、
+  CSS 属性和原型名、canvas、WebGL 等），可通过 `properties` 或分批 `evaluate_js` 扩展，不能视为全量枚举
 - 路径 B 环境伪装时，用 trace 命中确定优先调查/补齐对象，再结合
   `compare_env` 与动态验证确认完整范围，避免把覆盖集之外的未命中误作否定证据
 

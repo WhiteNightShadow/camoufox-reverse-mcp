@@ -20,7 +20,10 @@
  *
  * Output:
  *   window.__mcp_jsvmp_log - structured log array in the page main world
- *   (shared with proxy hook)
+ *   (shared with proxy hook). A probe in a same-origin child frame logs into
+ *   the topmost frame that runs a probe too, adding frame_url / frame_depth.
+ *   Every event has a seq; window.__mcp_jsvmp_meta.dropped counts the events
+ *   lost to the cap.
  *
  * This file is a function expression. utils/jsvmp_hooks.py calls it in the
  * page main world and handles the returned {installed, banner, ...}; the
@@ -46,6 +49,33 @@
         maxEntries: {{MAX_ENTRIES}}
     };
 
+    // Log into the topmost same-origin ancestor frame that runs a probe too,
+    // so a frame the page creates and removes again keeps its events. Those
+    // events carry frame_url and frame_depth. meta.seq numbers every event,
+    // meta.dropped counts the ones lost to the cap.
+    if (!window.__mcp_jsvmp_meta) hide('__mcp_jsvmp_meta', { seq: 0, dropped: 0, cap: CFG.maxEntries });
+    var SINK = window, sinkDepth = 0;
+    try {
+        var up = window, depth = 0;
+        while (up.parent && up.parent !== up) {
+            up = up.parent;
+            depth++;
+            var upMeta;
+            try { upMeta = up.__mcp_jsvmp_meta; } catch (crossOrigin) { break; }
+            if (upMeta && typeof upMeta === 'object') { SINK = up; sinkDepth = depth; }
+        }
+    } catch (e) {}
+    var META = SINK.__mcp_jsvmp_meta;
+    // A frame's URL can still be empty when the probe starts with the document;
+    // it is read again on the first event.
+    var FRAME_URL = null;
+    function frameUrl() {
+        if (!FRAME_URL) {
+            try { FRAME_URL = String(location.href).slice(0, 200); } catch (e) {}
+        }
+        return FRAME_URL || '?';
+    }
+
     var _Error = Error;
     var _JSON_stringify = JSON.stringify;
     var _FP_toString = Function.prototype.toString;
@@ -55,6 +85,7 @@
     var _Object_getPrototypeOf = Object.getPrototypeOf;
     var _Reflect_apply = Reflect.apply;
     var _Date_now = Date.now;
+    var _Array_push = Array.prototype.push;
     // busy: do not record the probe's own reads, or re-enter while recording.
     var busy = true;
     var originals = [];
@@ -90,9 +121,13 @@
     }
 
     function log(entry) {
-        if (window.__mcp_jsvmp_log.length >= CFG.maxEntries) return;
+        var seq = META.seq++;
+        var arr = SINK.__mcp_jsvmp_log;
+        if (!arr || arr.length >= META.cap) { META.dropped++; return; }
+        entry.seq = seq;
+        if (SINK !== window) { entry.frame_url = frameUrl(); entry.frame_depth = sinkDepth; }
         entry.ts = _Date_now();
-        window.__mcp_jsvmp_log.push(entry);
+        _Reflect_apply(_Array_push, arr, [entry]);
     }
 
     function tapGetter(ownerName, owner, prop) {
@@ -173,17 +208,22 @@
     } catch (e) {}
 
     var tapStats = { total: 0, tapped: 0 };
+    var tappedByOwner = {};
     for (var i = 0; i < targets.length; i++) {
         var ownerName = targets[i][0];
         var owner = targets[i][1];
         var props;
         try { props = _Object_getOwnPropertyNames(owner); } catch (e) { continue; }
+        tappedByOwner[ownerName] = 0;
         for (var j = 0; j < props.length; j++) {
             var p = props[j];
             if (p === 'constructor' || p === '__proto__' ||
                 p === 'toString' || p === 'valueOf') continue;
             tapStats.total++;
-            if (tapGetter(ownerName, owner, p)) tapStats.tapped++;
+            if (tapGetter(ownerName, owner, p)) {
+                tapStats.tapped++;
+                tappedByOwner[ownerName]++;
+            }
         }
     }
 
@@ -208,6 +248,8 @@
         installed: true,
         tapped: tapStats.tapped,
         total: tapStats.total,
+        tappedByOwner: tappedByOwner,
+        frameDepth: sinkDepth,
         banner: '[JSVMP-T] Transparent probe installed. Tapped ' +
                 tapStats.tapped + '/' + tapStats.total + ' getters. ' +
                 'scriptUrl=' + (CFG.scriptUrl || '(all)')

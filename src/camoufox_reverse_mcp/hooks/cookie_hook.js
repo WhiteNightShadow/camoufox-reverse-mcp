@@ -1,15 +1,18 @@
 /**
- * cookie_hook.js - document.cookie 原型链级 hook
+ * Preset "cookie": records document.cookie reads and writes in
+ * window.__mcp_cookie_log. Runs in the page main world inside PRELUDE.
  *
- * 关键点:
- *   document.cookie 的 descriptor 定义在 Document.prototype (或 HTMLDocument.prototype)
- *   上,不在 document 实例上。必须沿原型链找到定义 setter/getter 的位置再替换。
- *   直接 Object.defineProperty(document, 'cookie', ...) 会被浏览器忽略或抛错。
+ * The cookie accessor lives on Document.prototype (or HTMLDocument.prototype),
+ * not on the document object: walk the prototype chain to the owner with
+ * getPrototypeOf / getOwnPropertyDescriptor and replace it there.
  */
 (function () {
     if (window.__mcp_cookie_hook_installed) return;
-    window.__mcp_cookie_hook_installed = true;
-    window.__mcp_cookie_log = window.__mcp_cookie_log || [];
+    __mcpHide('__mcp_cookie_hook_installed', true);
+    if (!window.__mcp_cookie_log) __mcpHide('__mcp_cookie_log', []);
+
+    var _apply = Reflect.apply;
+    var _now = Date.now;
 
     function findCookieDescriptor() {
         var proto = Object.getPrototypeOf(document);
@@ -22,50 +25,28 @@
     }
 
     var found = findCookieDescriptor();
-    if (!found) {
-        console.warn('[COOKIE-HOOK] cookie descriptor not found on prototype chain');
-        return;
+    if (!found || !found.descriptor.get || !found.descriptor.set) return;
+    var origGet = found.descriptor.get;
+    var origSet = found.descriptor.set;
+
+    function push(entry) {
+        var log = window.__mcp_cookie_log;
+        log[log.length] = entry;
+        if (log.length > 1000) log.splice(0, log.length - 1000);
     }
 
-    var descriptor = found.descriptor;
-    var owner = found.owner;
-    var origSet = descriptor.set;
-    var origGet = descriptor.get;
-
-    if (!origSet || !origGet) {
-        console.warn('[COOKIE-HOOK] cookie descriptor missing getter/setter');
-        return;
-    }
-
-    Object.defineProperty(owner, 'cookie', {
-        set: function(value) {
-            try {
-                window.__mcp_cookie_log.push({
-                    op: 'set',
-                    value: String(value),
-                    stack: new Error().stack,
-                    ts: Date.now()
-                });
-                if (window.__mcp_cookie_log.length > 1000) window.__mcp_cookie_log.shift();
-            } catch (e) {}
-            return origSet.call(this, value);
-        },
-        get: function() {
-            var v = origGet.call(this);
-            try {
-                window.__mcp_cookie_log.push({
-                    op: 'get',
-                    value: String(v),
-                    stack: new Error().stack,
-                    ts: Date.now()
-                });
-                if (window.__mcp_cookie_log.length > 1000) window.__mcp_cookie_log.shift();
-            } catch (e) {}
+    __mcpDefine(found.owner, 'cookie', {
+        get: __mcpNative(function cookie() {
+            var v = _apply(origGet, this, []);
+            try { push({ op: 'get', value: String(v), stack: new Error().stack, ts: _now() }); } catch (e) {}
             return v;
-        },
-        configurable: true,
-        enumerable: true
-    });
-
-    console.log('[COOKIE-HOOK] installed on', owner.constructor.name || 'Document.prototype');
+        }, 'cookie'),
+        set: __mcpNative(function cookie(value) {
+            try {
+                push({ op: 'set', value: typeof value === 'string' ? value : '[' + typeof value + ']',
+                       stack: new Error().stack, ts: _now() });
+            } catch (e) {}
+            return _apply(origSet, this, [value]);
+        }, 'cookie')
+    }, 'document.cookie');
 })();

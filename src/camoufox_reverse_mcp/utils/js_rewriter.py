@@ -9,7 +9,7 @@ js_rewriter.py - JS 源码插桩改写器。
 源码/堆栈/耗时及 MCP 全局名称仍可被观察，运行时应在业务修改内建函数前安装。
 
 实际改写会在原 directive prologue 后插入 __mcp_tap_get / __mcp_tap_call 的运行时定义,
-并通过 window.__mcp_vmp_log 输出。
+并通过 globalThis.__mcp_vmp_log 输出（浏览器里就是 window.__mcp_vmp_log）。
 """
 from __future__ import annotations
 
@@ -22,44 +22,87 @@ from typing import Tuple
 INSTRUMENT_RUNTIME = r"""
 (function(){
   'use strict';
-  if (window.__mcp_tap_installed) return;
-  window.__mcp_tap_installed = true;
-  window.__mcp_vmp_log = window.__mcp_vmp_log || [];
+  // The page global in a browser and globalThis in Node, vm or a worker, so a
+  // rewritten file also runs offline. Bare helper calls resolve on it.
+  var G = typeof globalThis !== 'undefined' ? globalThis
+        : (typeof self !== 'undefined' ? self : window);
+  if (G.__mcp_tap_installed) return;
   // Capture intrinsics once; never consult a target function's .apply/.name.
   var apply = Reflect.apply;
+  var defineProp = Object.defineProperty;
   var arrayPush = Array.prototype.push;
   var slice = Array.prototype.slice;
   var stringSlice = String.prototype.slice;
   var stringIndexOf = String.prototype.indexOf;
   var stringifyPrimitive = String;
   var now = Date.now;
+  var hasOwn = Object.prototype.hasOwnProperty;
   var CAP = 20000;
-  var siteSeq = 0;
   var sampleCredit = 0;
-  window.__mcp_tap_cfg = window.__mcp_tap_cfg || { sampling: 1, tagFilter: null };
+  // MCP globals are non-enumerable: they stay out of for...in and Object.keys.
+  function hide(owner, name, value){
+    try {
+      defineProp(owner, name, { value: value, writable: true, configurable: true, enumerable: false });
+    } catch (e) { owner[name] = value; }
+  }
+  hide(G, '__mcp_tap_installed', true);
+  // Events go to the topmost same-origin ancestor frame that runs this
+  // runtime too, so a frame the page creates and removes again does not take
+  // its events along. Such events carry frame_url and frame_depth.
+  var SINK = G, sinkDepth = 0;
+  try {
+    var up = G, depth = 0;
+    while (up.parent && up.parent !== up) {
+      up = up.parent;
+      depth++;
+      var upMeta;
+      try { upMeta = up.__mcp_vmp_meta; } catch (crossOrigin) { break; }
+      if (upMeta && typeof upMeta === 'object') { SINK = up; sinkDepth = depth; }
+    }
+  } catch (ignored) {}
+  // A frame's URL can still be empty this early; it is read again on use.
+  var FRAME_URL = null;
+  function frameUrl(){
+    if (!FRAME_URL) {
+      try { FRAME_URL = apply(stringSlice, stringifyPrimitive(G.location.href), [0, 200]); }
+      catch (e) {}
+    }
+    return FRAME_URL || '?';
+  }
+  if (!SINK.__mcp_vmp_log) hide(SINK, '__mcp_vmp_log', []);
+  var meta = SINK.__mcp_vmp_meta;
+  if (!meta || typeof meta !== 'object') {
+    // seq numbers every event, recorded or not; dropped counts the events
+    // lost to the cap since the log was last cleared.
+    meta = { seq: 0, dropped: 0, cap: CAP };
+    hide(SINK, '__mcp_vmp_meta', meta);
+  }
+  if (!G.__mcp_tap_cfg) hide(G, '__mcp_tap_cfg', { sampling: 1, tagFilter: null });
   // States armed with stage_break(). The MCP writes the armed set here each
   // time it serves an instrumented script, so states that run while the page
   // loads are covered too; stage_break() also updates a live page directly.
-  var hasOwn = Object.prototype.hasOwnProperty;
   var BREAKS = null/*__mcp_breaks__*/;
   if (BREAKS && typeof BREAKS === 'object') {
-    var armedBreaks = window.__mcp_tap_cfg.breaks || (window.__mcp_tap_cfg.breaks = {});
+    var armedBreaks = G.__mcp_tap_cfg.breaks || (G.__mcp_tap_cfg.breaks = {});
     for (var bk in BREAKS) {
       if (apply(hasOwn, BREAKS, [bk]) && !apply(hasOwn, armedBreaks, [bk])) armedBreaks[bk] = BREAKS[bk];
     }
   }
+  // Dispatcher states being executed, innermost last (see __mcp_tap_stage).
+  var stageStack = [];
   function _push(e, siteId){
-    var log = window.__mcp_vmp_log;
-    if (log.length >= CAP) return;
-    if (typeof siteId === 'string' && siteId) {
-      e.site_id = siteId;
-      e.seq = siteSeq++;
-    }
+    var seq = meta.seq++;
+    var log = SINK.__mcp_vmp_log;
+    if (!log || log.length >= CAP) { meta.dropped++; return; }
+    e.seq = seq;
+    if (typeof siteId === 'string' && siteId) e.site_id = siteId;
+    if (stageStack.length) e.stage = stageStack[stageStack.length - 1];
+    if (SINK !== G) { e.frame_url = frameUrl(); e.frame_depth = sinkDepth; }
     e.ts = now();
     apply(arrayPush, log, [e]);
   }
   function _enabled(tag, error){
-    var cfg = window.__mcp_tap_cfg;
+    var cfg = G.__mcp_tap_cfg;
     var f = cfg.tagFilter;
     if (f && (typeof f !== 'string' || typeof tag !== 'string' ||
               apply(stringIndexOf, tag, [f]) === -1)) return false;
@@ -116,34 +159,38 @@ INSTRUMENT_RUNTIME = r"""
     } catch (ignored) {}
     return r;
   }
-  window.__mcp_tap_get = function(obj, key, tag, siteId){
+  hide(G, '__mcp_tap_get', function(obj, key, tag, siteId){
     var val = obj[key]; // Throw the original getter/coercion exception unchanged.
     _getLog(obj, key, val, tag, siteId);
     return val;
-  };
-  window.__mcp_tap_call = function(fn, thisArg, args, tag, siteId, name){
+  });
+  hide(G, '__mcp_tap_call', function(fn, thisArg, args, tag, siteId, name){
     return _invoke(fn, thisArg, args, tag, siteId,
                    typeof name === 'string' ? name : 'anon', false);
-  };
-  window.__mcp_prepare_method = function(obj, key, tag, siteId){
+  });
+  hide(G, '__mcp_prepare_method', function(obj, key, tag, siteId){
     // This phase runs before argument evaluation, including spread/yield/await.
     // Only the actual property read coerces key; previews never coerce objects.
     var fn = obj[key];
     return function(args){
       return _invoke(fn, obj, args, tag, siteId, _preview(key), true);
     };
-  };
+  });
   // Legacy helper signature retained. Already-evaluated args cannot recover
   // getter-before-arguments ordering; new rewrites use prepare_method instead.
-  window.__mcp_tap_method = function(obj, key, args, tag, siteId){
-    return window.__mcp_prepare_method(obj, key, tag, siteId)(args);
-  };
+  hide(G, '__mcp_tap_method', function(obj, key, args, tag, siteId){
+    return G.__mcp_prepare_method(obj, key, tag, siteId)(args);
+  });
   // Dispatcher-level tap for flattened VMPs: one event per state, pushed when
   // the state returns (nested states first; a state that throws is not logged).
   // Arguments are copied before the call so the trace keeps the original list.
-  window.__mcp_tap_stage = function(p, fn, thisArg, args, tag, siteId){
+  // Events recorded while a state runs carry it as `stage`.
+  hide(G, '__mcp_tap_stage', function(p, fn, thisArg, args, tag, siteId){
     var list = apply(slice, args, [0]);
-    var r = apply(fn, thisArg, [p].concat(list));
+    var r;
+    stageStack[stageStack.length] = p;
+    try { r = apply(fn, thisArg, [p].concat(list)); }
+    finally { stageStack.length = stageStack.length - 1; }
     try {
       if (_enabled(tag, false)) {
         var n = list.length > 3 ? 3 : list.length;
@@ -158,7 +205,7 @@ INSTRUMENT_RUNTIME = r"""
     } catch (ignored) {}
     try { _maybeBreak(p, list, r, tag, siteId); } catch (ignored) {}
     return r;
-  };
+  });
   // ---- stage break: bounded deep capture for selected states ----
   // Opt-in only: stage_break() arms states in __mcp_tap_cfg.breaks.
   var SNAP_MAX_STR = 200;
@@ -233,7 +280,7 @@ INSTRUMENT_RUNTIME = r"""
     return out;
   }
   function _maybeBreak(p, list, ret, tag, siteId){
-    var cfg = window.__mcp_tap_cfg;
+    var cfg = G.__mcp_tap_cfg;
     var breaks = cfg && cfg.breaks;
     if (!breaks || !apply(hasOwn, breaks, [p])) return;
     var b = breaks[p];
@@ -372,22 +419,26 @@ def stage_call_edits(
     include_source_site: bool = False,
     source_id: str = "",
     allowed_starts: set[int] | None = None,
+    stats: dict | None = None,
 ) -> list[dict]:
     """Find dispatcher entry calls and build their ``__mcp_tap_stage`` edits.
 
     Only the exact ``return fn.apply(this, [<int>].concat(...arguments))`` shape
     is matched. ``allowed_starts`` keeps only matches at those offsets, i.e. the
-    starts of real return statements when the source could be parsed.
+    starts of real return statements when the source could be parsed. When
+    ``max_rewrites`` leaves matches out, ``stats["stage_capped"]`` is set.
     """
     if include_source_site and not source_id:
         source_id, _ = source_identity(src)
     edits: list[dict] = []
     for match in _STAGE_CALL_RE.finditer(src):
-        if len(edits) >= max_rewrites:
-            break
         start, end = match.span()
         if allowed_starts is not None and start not in allowed_starts:
             continue
+        if len(edits) >= max_rewrites:
+            if stats is not None:
+                stats["stage_capped"] = True
+            break
         site = None
         site_arg = ""
         if include_source_site:
@@ -419,13 +470,15 @@ def rewrite_stage_calls(
     max_rewrites: int = 20000,
     include_source_site: bool = False,
     source_id: str = "",
+    stats: dict | None = None,
 ) -> Tuple[str, int, list[dict]]:
     """Rewrite dispatcher entry calls into ``__mcp_tap_stage`` taps.
 
     Only the exact ``return fn.apply(this, [<int>].concat(...arguments))`` shape
     is matched; every other call site is left byte-for-byte unchanged.
     """
-    edits = stage_call_edits(src, tag, max_rewrites, include_source_site, source_id)
+    edits = stage_call_edits(src, tag, max_rewrites, include_source_site, source_id,
+                             stats=stats)
     return apply_stage_edits(src, edits), len(edits), [e["site"] for e in edits if e["site"]]
 
 
@@ -435,6 +488,7 @@ def _rewrite_member_access(
     max_rewrites: int = 5000,
     include_source_site: bool = False,
     source_id: str = "",
+    stats: dict | None = None,
 ) -> Tuple[str, int, list[dict]]:
     statements = _simple_statements(src)
     if statements is None:
@@ -442,11 +496,13 @@ def _rewrite_member_access(
     edits = []
     source_sites: list[dict] = []
     for statement in statements:
-        if len(edits) >= max_rewrites:
-            break
         match = _MEMBER_BRACKET_RE.fullmatch(statement.group('expression'))
         if match is None:
             continue
+        if len(edits) >= max_rewrites:
+            if stats is not None:
+                stats["edits_capped"] = True
+            break
         obj, key = match.group('object', 'key')
         if obj in _RESERVED or obj in ('require', 'module', 'exports', 'console') or obj.startswith('__mcp_'):
             continue
@@ -497,12 +553,14 @@ def regex_rewrite(src: str, tag: str = "vmp",
         new_src, n, source_sites = _rewrite_member_access(
             src, tag, max_rewrites,
             include_source_site=include_source_site, source_id=source_id,
+            stats=stats,
         )
         stats["member_access_rewrites"] = n
     if tap_stage_calls and statements is None:
         new_src, n, stage_sites = rewrite_stage_calls(
             new_src, tag, max_rewrites,
             include_source_site=include_source_site, source_id=source_id,
+            stats=stats,
         )
         stats["stage_rewrites"] = n
         source_sites.extend(stage_sites)

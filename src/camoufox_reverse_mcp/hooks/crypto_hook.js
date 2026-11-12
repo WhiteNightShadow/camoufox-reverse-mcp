@@ -1,33 +1,47 @@
+// Preset "crypto": records btoa/atob and JSON.stringify results in
+// window.__mcp_crypto_log. Runs in the page main world inside PRELUDE.
 (function() {
-    window.__mcp_crypto_log = [];
+    if (window.__mcp_crypto_hooked) return;
+    __mcpHide('__mcp_crypto_hooked', true);
+    if (!window.__mcp_crypto_log) __mcpHide('__mcp_crypto_log', []);
 
-    const _btoa = window.btoa;
-    const _atob = window.atob;
-    window.btoa = function(s) {
-        const result = _btoa.call(this, s);
-        const info = { func: 'btoa', input: s, output: result, stack: new Error().stack, timestamp: Date.now() };
-        window.__mcp_crypto_log.push(info);
-        console.log('[CRYPTO] btoa:', s.substring(0, 100), '->', result.substring(0, 100));
-        return result;
-    };
-    window.atob = function(s) {
-        const result = _atob.call(this, s);
-        const info = { func: 'atob', input: s, output: result, stack: new Error().stack, timestamp: Date.now() };
-        window.__mcp_crypto_log.push(info);
-        return result;
-    };
+    var _apply = Reflect.apply;
+    var _btoa = window.btoa;
+    var _atob = window.atob;
+    var _stringify = JSON.stringify;
+    var _now = Date.now;
 
-    const _stringify = JSON.stringify;
-    JSON.stringify = function() {
-        const result = _stringify.apply(this, arguments);
-        if (result && result.length < 2000) {
-            window.__mcp_crypto_log.push({
-                func: 'JSON.stringify',
-                input: _stringify(arguments[0]).substring(0, 500),
-                output: result.substring(0, 500),
-                timestamp: Date.now()
-            });
-        }
+    function push(entry) {
+        var log = window.__mcp_crypto_log;
+        log[log.length] = entry;
+        if (log.length > 2000) log.splice(0, log.length - 2000);
+    }
+    // Never coerce page objects a second time: that would run their toString.
+    function text(v, max) {
+        if (typeof v !== 'string') return '[' + typeof v + ']';
+        return v.length > max ? v.slice(0, max) : v;
+    }
+
+    __mcpDefine(window, 'btoa', __mcpNative(function btoa(s) {
+        var result = _apply(_btoa, this, arguments);
+        try { push({ func: 'btoa', input: text(s, 2000), output: text(result, 2000),
+                     stack: new Error().stack, timestamp: _now() }); } catch (e) {}
         return result;
-    };
+    }, 'btoa'), 'btoa');
+    __mcpDefine(window, 'atob', __mcpNative(function atob(s) {
+        var result = _apply(_atob, this, arguments);
+        try { push({ func: 'atob', input: text(s, 2000), output: text(result, 2000),
+                     stack: new Error().stack, timestamp: _now() }); } catch (e) {}
+        return result;
+    }, 'atob'), 'atob');
+    // One native call per page call: the output is the stringified input.
+    __mcpDefine(JSON, 'stringify', __mcpNative(function stringify(value, replacer, space) {
+        var result = _apply(_stringify, this, arguments);
+        try {
+            if (typeof result === 'string' && result.length < 2000) {
+                push({ func: 'JSON.stringify', output: result.slice(0, 500), timestamp: _now() });
+            }
+        } catch (e) {}
+        return result;
+    }, 'stringify'), 'JSON.stringify');
 })();

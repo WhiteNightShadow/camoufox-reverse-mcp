@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import os
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from ..server import browser_manager, mcp
 from ..utils.frames import list_frame_metadata
 from ..utils.jsvmp_hooks import main_world_init_script, proxy_probe, transparent_probe
+from ..utils.presets import canonical_preset, preset_expression
 from ..utils.worlds import native_main_world_available
 
 _PRE_INJECT_REGISTER_TIMEOUT = 10.0
@@ -264,26 +264,17 @@ async def _inject_hook_by_name(name: str, page=None) -> tuple[bool, str]:
     page tells the JSVMP probes whether Camoufox's native main-world channel is
     on; without one they assume it is.
     """
-    hooks_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "hooks")
-    preset_files = {
-        "xhr": "xhr_hook.js", "fetch": "fetch_hook.js",
-        "crypto": "crypto_hook.js", "websocket": "websocket_hook.js",
-        "debugger_bypass": "debugger_trap.js",
-        "cookie_hook": "cookie_hook.js", "runtime_probe": "runtime_probe.js",
-    }
     try:
-        # The JSVMP probes go into the page main world, like hook_jsvmp_interpreter.
+        # Probes and presets all go into the page main world (presets since
+        # v1.10.0; in the isolated world they missed the page's own calls).
         if name in ("jsvmp_probe", "jsvmp_probe_transparent"):
             native = page is None or await native_main_world_available(page)
             probe = proxy_probe() if name == "jsvmp_probe" else transparent_probe()
             js = main_world_init_script(probe, native=native)
             persist_name = f"pre_inject:{name}"
-        elif name in preset_files:
-            fpath = os.path.join(hooks_dir, preset_files[name])
-            if not os.path.exists(fpath):
-                return False, f"hook file not found: {preset_files[name]}"
-            with open(fpath, "r", encoding="utf-8") as f:
-                js = f.read()
+        elif canonical_preset(name) is not None:
+            native = page is None or await native_main_world_available(page)
+            js = main_world_init_script(preset_expression(name), native=native, label="MCP preset")
             persist_name = f"pre_inject:{name}"
         else:
             return False, f"unknown hook name: {name}"

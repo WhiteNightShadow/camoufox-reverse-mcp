@@ -15,7 +15,9 @@
  *   {{PROXY_OBJECTS}}  - 要装 Proxy 的全局对象名列表 JSON 字符串
  *
  * 输出:
- *   window.__mcp_jsvmp_log - 结构化日志数组(页面主世界)
+ *   window.__mcp_jsvmp_log - 结构化日志数组(页面主世界)。同源子 frame 里的探针写进
+ *   最顶层同样装了探针的 frame,事件带 frame_url / frame_depth;每条事件带 seq,
+ *   超过上限丢掉的条数记在 window.__mcp_jsvmp_meta.dropped。
  *
  * 本文件是一个函数表达式,由 utils/jsvmp_hooks.py 在页面主世界里调用。
  * 返回值 {installed, banner, ...} 交给调用方处理,探针自己不往页面的 console 打印。
@@ -43,6 +45,33 @@
         proxyObjects: JSON.parse('{{PROXY_OBJECTS}}')
     };
 
+    // Log into the topmost same-origin ancestor frame that runs a probe too,
+    // so a frame the page creates and removes again keeps its events. Those
+    // events carry frame_url and frame_depth. meta.seq numbers every event,
+    // meta.dropped counts the ones lost to the cap.
+    if (!window.__mcp_jsvmp_meta) hide('__mcp_jsvmp_meta', { seq: 0, dropped: 0, cap: CFG.maxEntries });
+    var SINK = window, sinkDepth = 0;
+    try {
+        var up = window, depth = 0;
+        while (up.parent && up.parent !== up) {
+            up = up.parent;
+            depth++;
+            var upMeta;
+            try { upMeta = up.__mcp_jsvmp_meta; } catch (crossOrigin) { break; }
+            if (upMeta && typeof upMeta === 'object') { SINK = up; sinkDepth = depth; }
+        }
+    } catch (e) {}
+    var META = SINK.__mcp_jsvmp_meta;
+    // A frame's URL can still be empty when the probe starts with the document;
+    // it is read again on the first event.
+    var FRAME_URL = null;
+    function frameUrl() {
+        if (!FRAME_URL) {
+            try { FRAME_URL = String(location.href).slice(0, 200); } catch (e) {}
+        }
+        return FRAME_URL || '?';
+    }
+
     // 保存一组"原始引用" - 所有 hook 内部使用这组,避免被页面覆盖后互相污染
     var _Error = Error;
     var _JSON_stringify = JSON.stringify;
@@ -58,6 +87,7 @@
     var _Array_slice = Array.prototype.slice;
     var _Array_from = Array.from;
     var _Date_now = Date.now;
+    var _Array_push = Array.prototype.push;
 
     // 下面会替换 Function.prototype.call/apply/bind,探针自己的代码一律走保存好的
     // Reflect.apply,不经过被替换的方法,否则会无限递归。
@@ -110,9 +140,13 @@
     }
 
     function log(entry) {
-        if (window.__mcp_jsvmp_log.length >= CFG.maxEntries) return;
+        var seq = META.seq++;
+        var arr = SINK.__mcp_jsvmp_log;
+        if (!arr || arr.length >= META.cap) { META.dropped++; return; }
+        entry.seq = seq;
+        if (SINK !== window) { entry.frame_url = frameUrl(); entry.frame_depth = sinkDepth; }
         entry.ts = _Date_now();
-        window.__mcp_jsvmp_log.push(entry);
+        _Reflect_apply(_Array_push, arr, [entry]);
     }
 
     // ========== 1. Function.prototype.apply / call / bind ==========
@@ -431,9 +465,16 @@
         return { restored: restored };
     });
 
+    var replacedLabels = [], proxiedNames = [];
+    for (var ri = 0; ri < replaced.length; ri++) _Reflect_apply(_Array_push, replacedLabels, [replaced[ri].label]);
+    for (var pi = 0; pi < proxied.length; pi++) _Reflect_apply(_Array_push, proxiedNames, [proxied[pi].key]);
+
     return {
         installed: true,
         proxyFailures: proxyFailures,
+        replaced: replacedLabels,
+        proxied: proxiedNames,
+        frameDepth: sinkDepth,
         banner: '[JSVMP] Probe installed. scriptUrl=' + (CFG.scriptUrl || '(all)') +
                 ' calls=' + CFG.trackCalls + ' props=' + CFG.trackProps +
                 ' reflect=' + CFG.trackReflect + ' proxyObjects=' + CFG.proxyObjects.length

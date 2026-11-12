@@ -9,6 +9,7 @@ from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from ..utils.domains import domain_matches
 
 from ..server import mcp, browser_manager
+from ..utils.worlds import evaluate_in_world
 
 
 @mcp.tool()
@@ -228,7 +229,8 @@ async def get_request_initiator(request_id: int) -> dict:
         req_url = target_entry["url"]
         escaped_url = json.dumps(req_url)
 
-        result = await page.evaluate(f"""() => {{
+        # The xhr/fetch presets log in the page main world (v1.10.0).
+        result, _, _ = await evaluate_in_world(page, f"""() => {{
             const reqUrl = {escaped_url};
             function searchLogs(logs, type) {{
                 if (!logs || !logs.length) return null;
@@ -291,7 +293,7 @@ async def get_request_initiator(request_id: int) -> dict:
                         : 'Hooks active but no matching URL found in logs.'
                 }}
             }};
-        }}""")
+        }}""", "main")
 
         source = result.get("type", "unknown")
         return {

@@ -148,7 +148,8 @@ def ast_rewrite(
     # found in the rewritten text, and their source sites are mapped back.
     stage_edits: list[dict] = []
     if tap_stage_calls:
-        stage_edits = stage_call_edits(original, tag, max_edits, include_source_site, source_id)
+        stage_edits = stage_call_edits(original, tag, max_edits, include_source_site, source_id,
+                                       stats=stats)
         src = apply_stage_edits(original, stage_edits)
 
     tree = None
@@ -431,6 +432,10 @@ def ast_rewrite(
             stats.setdefault("semantic_skips", []).append("with_statement")
             return False
         if len(edits) >= max_edits:
+            if ((ntype == 'MemberExpression' and rewrite_member_access)
+                    or (ntype == 'CallExpression' and rewrite_calls)):
+                # Later candidates stay untapped; report it instead of truncating silently.
+                stats["edits_capped"] = True
             return
         if ntype == 'MemberExpression' and rewrite_member_access:
             if emit_member_tap(node, parent):

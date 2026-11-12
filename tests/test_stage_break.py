@@ -14,7 +14,8 @@ from camoufox_reverse_mcp.utils.js_rewriter import INSTRUMENT_RUNTIME
 HARNESS = r"""
 const fs = require('fs');
 const runtime = fs.readFileSync(0, 'utf8');
-global.window = { __mcp_vmp_log: [] };
+// The runtime lives on globalThis (v1.10.0); window is an alias here.
+global.window = globalThis;
 eval(runtime);
 
 const BREAK_STATE = Number(process.env.BREAK_STATE || 7);
@@ -88,7 +89,8 @@ def test_stage_break_snapshot_caps_size():
 FIX_HARNESS = r"""
 const fs = require('fs');
 const runtime = fs.readFileSync(0, 'utf8');
-global.window = { __mcp_vmp_log: [] };
+// The runtime lives on globalThis (v1.10.0); window is an alias here.
+global.window = globalThis;
 eval(runtime);
 const cfg = window.__mcp_tap_cfg;
 if (process.env.ARM !== '0') {

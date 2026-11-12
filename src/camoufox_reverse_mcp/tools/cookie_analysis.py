@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 
 from ..server import mcp, browser_manager
+from ..utils.worlds import evaluate_in_world
 
 
 _COOKIE_NAME_RE = re.compile(r'^\s*([^=;\s]+)\s*=')
@@ -77,7 +78,7 @@ async def analyze_cookie_sources(
         js_sources: dict[str, list[dict]] = {}
         try:
             page = await browser_manager.get_active_page()
-            log = await page.evaluate("window.__mcp_cookie_log || []")
+            log, _, _ = await evaluate_in_world(page, "() => window.__mcp_cookie_log || []", "main")
             for entry in log:
                 if entry.get("op") != "set":
                     continue
