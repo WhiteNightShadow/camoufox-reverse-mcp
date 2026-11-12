@@ -8,6 +8,18 @@ from ..utils.worlds import evaluate_in_world
 
 CAPTURES = ("args_only", "args_ret", "args_ret_stack")
 
+# States armed for this MCP session. instrumentation writes them into every
+# script it serves, so a break also fires for states that run during page load.
+_ARMED: dict[int, dict] = {}
+
+
+def armed_breaks_literal() -> str | None:
+    """JS object literal of the armed states, or None when nothing is armed."""
+    if not _ARMED:
+        return None
+    return json.dumps({str(p): {**spec, "hits": 0} for p, spec in sorted(_ARMED.items())},
+                      separators=(",", ":"))
+
 
 def _target(page, frame_url, frame_name, frame_index):
     if any(v is not None for v in (frame_url, frame_name, frame_index)):
@@ -34,6 +46,13 @@ async def stage_break(
     bounded deep snapshot of the arguments (and optionally the return value and
     a filtered call stack) as a `tap_stage_break` event.
 
+    Armed states stay armed for this MCP session until "clear": the live page is
+    updated at once, and every instrumented script served afterwards carries the
+    armed set, so states that run while a page loads are captured after a reload.
+    The `limit` counts hits per page load. Snapshots read own data properties
+    only and report getters as {"__t": "accessor"} without calling them; a Proxy
+    argument still sees its ownKeys/getOwnPropertyDescriptor traps.
+
     Args:
         action: "set" arm one state, "clear" disarm (all when `p` is omitted),
             "list" show armed states and their hit counters.
@@ -44,8 +63,9 @@ async def stage_break(
         max_items: Maximum keys/elements kept per object/array (1-500, default 50).
 
     Returns:
-        dict with the armed-state set, the runtime's hit counters, and whether
-        the instrumentation runtime is present on the page.
+        dict with the states armed for later loads (`session_armed`), the live
+        page's armed set and hit counters, and whether the instrumentation
+        runtime is present on the page.
     """
     if action not in ("set", "clear", "list"):
         return {"error": "action must be one of: set, clear, list"}
@@ -63,11 +83,21 @@ async def stage_break(
         if not 1 <= max_items <= 500:
             return {"error": "max_items must be between 1 and 500"}
 
+    if action == "set":
+        _ARMED[p] = {"capture": capture, "limit": limit, "depth": depth, "maxItems": max_items}
+    elif action == "clear":
+        if p is None:
+            _ARMED.clear()
+        else:
+            _ARMED.pop(p, None)
+    session_armed = sorted(_ARMED)
+
     try:
         page = await browser_manager.get_active_page()
+        target, frame = _target(page, frame_url, frame_name, frame_index)
     except Exception as e:
-        return {"error": f"no active page: {e}"}
-    target, frame = _target(page, frame_url, frame_name, frame_index)
+        return {"action": action, "session_armed": session_armed,
+                "error": f"live page not updated: {e}"}
 
     if action == "set":
         spec = json.dumps({"p": p, "capture": capture, "limit": limit,
@@ -103,10 +133,12 @@ async def stage_break(
     try:
         data, backend, warning = await evaluate_in_world(target, script, "main")
     except Exception as e:
-        return {"error": str(e)}
+        return {"action": action, "session_armed": session_armed,
+                "error": f"live page not updated: {e}"}
 
     result = {
         "action": action,
+        "session_armed": session_armed,
         "world": "main",
         "frame": frame,
         "execution_backend": backend,
@@ -116,6 +148,7 @@ async def stage_break(
     if not result.get("runtime_installed"):
         result["note"] = (
             "instrumentation runtime is not present on this page; install "
-            "instrumentation(action='install', tap_stage_calls=True) and reload/navigate first"
+            "instrumentation(action='install', tap_stage_calls=True) and reload/navigate. "
+            "Armed states are applied to the scripts served from then on."
         )
     return result

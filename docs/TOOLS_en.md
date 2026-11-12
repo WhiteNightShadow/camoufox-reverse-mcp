@@ -28,6 +28,7 @@
 | Tool | Description |
 |------|-------------|
 | `evaluate_js` | Evaluate JS in the compatible isolated world or an explicit page main world/frame |
+| `trace_session(action)` | Playwright trace recording: `start` (screenshots/snapshots/sources), `stop` writes a `.zip` to open in trace.playwright.dev or `playwright show-trace`, `status` reports state. Records the default browser context; relaunching the browser loses an unfinished recording |
 
 ### Script Analysis
 | Tool | Description |
@@ -70,8 +71,7 @@
 |------|-------------|
 | `hook_jsvmp_interpreter` | JSVMP runtime probe in the page main world (`mode="proxy"` full coverage / `mode="transparent"` replaces getters only, fewer changes); read the log with `evaluate_js("window.__mcp_jsvmp_log \|\| []", world="main")` |
 | `instrumentation(action)` | Source-level instrumentation: `install` / `log` / `stop` / `reload` / `status` |
-| `stage_break(action)` | State-level deep capture for `tap_stage_calls`: `set` records a bounded deep snapshot for one state `p` (`args_only`/`args_ret`/`args_ret_stack`), `clear` disarms, `list` shows hit counters; emits `tap_stage_break` events |
-| `trace_session(action)` | Playwright trace recording: `start` (screenshots/snapshots/sources), `stop` writes a `.zip` you can open in trace.playwright.dev, `status` reports state. Firefox has no CDP, so this is the only replay-style debugging path |
+| `stage_break(action)` | State-level deep capture for `tap_stage_calls`: `set` records a bounded deep snapshot for one state `p` (`args_only`/`args_ret`/`args_ret_stack`), `clear` disarms, `list` shows hit counters; emits `tap_stage_break` events. Armed states last for the MCP session and ship with every script rewritten afterwards, so states that run during page load are captured after a reload; snapshots read own data properties and never call getters |
 | `compare_env` | Collect browser env fingerprint for Node.js/jsdom comparison |
 
 Set `include_source_site=True` when browser and sandbox traces need stable

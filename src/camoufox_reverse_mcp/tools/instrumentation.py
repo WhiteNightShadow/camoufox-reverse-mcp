@@ -20,6 +20,7 @@ from ..utils.js_rewriter import (
     regex_rewrite,
     INSTRUMENT_RUNTIME,
     ACORN_REWRITE_JS_TEMPLATE,
+    BREAKS_PLACEHOLDER,
 )
 from ..utils.ast_rewriter import ast_rewrite as _ast_rewrite_py
 
@@ -38,6 +39,16 @@ _FULFILL_STRIP_HEADERS = (
     "content-encoding", "Content-Encoding",
     "transfer-encoding", "Transfer-Encoding",
 )
+
+
+def _with_stage_breaks(body: str) -> str:
+    """Write the states armed by stage_break() into a served runtime."""
+    from .stage_break import armed_breaks_literal
+
+    literal = armed_breaks_literal()
+    if literal is None:
+        return body
+    return body.replace(BREAKS_PLACEHOLDER, literal, 1)
 
 
 def _clean_response_headers(headers) -> dict:
@@ -284,7 +295,8 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
                     stats["last_mode_used"] = cached["mode"]
                     stats["last_parser_backend"] = cached["parser_backend"]
                     headers["content-type"] = "application/javascript; charset=utf-8"
-                    await route.fulfill(status=resp.status, headers=headers, body=cached["body"])
+                    await route.fulfill(status=resp.status, headers=headers,
+                                        body=_with_stage_breaks(cached["body"]))
                     return
                 if len(body_bytes) > max_file_size:
                     skip = on_oversized == "skip" or (on_oversized == "selective" and not (prop_filter_set or obj_filter_set))
@@ -355,7 +367,8 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
                 stats["total_edits"] += edit_count
                 stats["last_mode_used"] = mode_used
                 headers["content-type"] = "application/javascript; charset=utf-8"
-                await route.fulfill(status=resp.status, headers=headers, body=rewritten)
+                await route.fulfill(status=resp.status, headers=headers,
+                                    body=_with_stage_breaks(rewritten))
             except Exception as exc:
                 stats["last_error"] = str(exc)
                 # Never continue_ after route.fetch: that could execute a POST

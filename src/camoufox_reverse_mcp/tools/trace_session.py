@@ -42,8 +42,14 @@ async def trace_session(
     if ctx is None:
         return {"error": "no browser context available; launch the browser first"}
 
+    note = None
+    if _TRACES and _TRACES.get("context") is not ctx:
+        # The browser was relaunched: the recording ended with its old context.
+        _TRACES.clear()
+        note = "the browser context changed since start; that recording was lost"
+
     if action == "status":
-        return {"recording": bool(_TRACES)}
+        return {"recording": bool(_TRACES), **({"note": note} if note else {})}
 
     if action == "start":
         if _TRACES:
@@ -53,11 +59,13 @@ async def trace_session(
         except Exception as e:
             return {"error": str(e)}
         _TRACES["started_at"] = time.time()
+        _TRACES["context"] = ctx
         return {"recording": True, "options": {"screenshots": screenshots,
-                                               "snapshots": snapshots, "sources": sources}}
+                                               "snapshots": snapshots, "sources": sources},
+                **({"note": note} if note else {})}
 
     if not _TRACES:
-        return {"error": "no trace is being recorded; call action='start' first"}
+        return {"error": note or "no trace is being recorded; call action='start' first"}
 
     dest = pathlib.Path(path) if path else (
         pathlib.Path(tempfile.gettempdir()) / f"mcp-trace-{int(time.time())}.zip")

@@ -139,7 +139,7 @@ The client should launch the browser and return the title `Example Domain`. If s
 | Group | Count | What it covers |
 |---|---:|---|
 | [Browser Control](docs/TOOLS_en.md#browser-control) | 10 | Launch, navigate, screenshot, snapshot, click, type |
-| [JS Execution & Debugging](docs/TOOLS_en.md#js-execution--debugging) | 2 | Run JS in the main world, record replayable trace sessions |
+| [JS Execution & Debugging](docs/TOOLS_en.md#js-execution--debugging) | 2 | Run JS in the isolated context or the page main world, record replayable sessions |
 | [Script Analysis](docs/TOOLS_en.md#script-analysis) | 2 | List, read and save scripts, search code |
 | [Hooking & Tracing](docs/TOOLS_en.md#hooking--tracing) | 5 | Function hooks and traces, preset hooks, console logs |
 | [Network Analysis](docs/TOOLS_en.md#network-analysis) | 8 | Capture, intercept, initiator stacks, compare, export |

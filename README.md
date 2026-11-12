@@ -139,7 +139,7 @@ uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-revers
 | 类别 | 数量 | 用途 |
 |---|---:|---|
 | [浏览器控制](docs/TOOLS.md#浏览器控制) | 10 | 启动、导航、截图、快照、点击、输入 |
-| [JS 执行与调试](docs/TOOLS.md#js-执行与调试) | 2 | 在主世界执行 JS、录制可在 trace viewer 回放的会话 |
+| [JS 执行与调试](docs/TOOLS.md#js-执行与调试) | 2 | 在隔离上下文或页面主世界执行 JS，录制可回放的会话 |
 | [脚本分析](docs/TOOLS.md#脚本分析) | 2 | 列出、读取、保存脚本，搜索代码 |
 | [Hook 与追踪](docs/TOOLS.md#hook-与追踪) | 5 | 函数 Hook 和 Trace、预置 Hook、控制台日志 |
 | [网络分析](docs/TOOLS.md#网络分析) | 8 | 抓包、拦截、发起调用栈、请求对比、导出 |

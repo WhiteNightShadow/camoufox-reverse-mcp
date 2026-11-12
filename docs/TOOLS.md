@@ -28,6 +28,7 @@
 | 工具 | 说明 |
 |------|------|
 | `evaluate_js` | 执行 JS 表达式；默认隔离上下文，可显式选择主世界和目标 Frame |
+| `trace_session(action)` | Playwright 会话录制：`start` 开始（screenshots/snapshots/sources）、`stop` 导出 `.zip`（可用 trace.playwright.dev 或 `playwright show-trace` 打开）、`status` 查看状态。只记录默认浏览器上下文；重新启动浏览器后未停止的录制会丢失 |
 
 ### 脚本分析
 | 工具 | 说明 |
@@ -70,8 +71,7 @@
 |------|------|
 | `hook_jsvmp_interpreter` | JSVMP 运行时探针，装在页面主世界（`mode="proxy"` 全覆盖 / `mode="transparent"` 只替换 getter，改动较少）；日志用 `evaluate_js("window.__mcp_jsvmp_log \|\| []", world="main")` 读取 |
 | `instrumentation(action)` | 源码级插桩：`install` 注册改写 / `log` 获取日志 / `stop` 停止 / `reload` 重载 / `status` 查看状态 |
-| `stage_break(action)` | 配合 `tap_stage_calls` 的状态级深挖：`set` 对指定状态 `p` 记录有界深拷贝（`args_only`/`args_ret`/`args_ret_stack`）、`clear` 撤销、`list` 查看命中计数；产出 `tap_stage_break` 事件 |
-| `trace_session(action)` | Playwright 会话录制：`start` 开始（screenshots/snapshots/sources）、`stop` 导出 `.zip`（可用 trace.playwright.dev 打开）、`status` 查看状态。Firefox 无 CDP，这是唯一的"回放式"调试手段 |
+| `stage_break(action)` | 配合 `tap_stage_calls` 的状态级深挖：`set` 对指定状态 `p` 记录有界深拷贝（`args_only`/`args_ret`/`args_ret_stack`）、`clear` 撤销、`list` 查看命中计数；产出 `tap_stage_break` 事件。布下的状态在本次 MCP 会话内一直有效，之后改写的脚本都带上它，刷新后页面加载阶段执行的状态也能记到；快照只读自有数据属性，不调用 getter |
 | `compare_env` | 浏览器环境指纹收集，用于与 Node.js/jsdom 对比 |
 
 需要对齐浏览器与沙箱中的同一执行点时，可在安装时设置

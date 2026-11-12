@@ -37,6 +37,17 @@ INSTRUMENT_RUNTIME = r"""
   var siteSeq = 0;
   var sampleCredit = 0;
   window.__mcp_tap_cfg = window.__mcp_tap_cfg || { sampling: 1, tagFilter: null };
+  // States armed with stage_break(). The MCP writes the armed set here each
+  // time it serves an instrumented script, so states that run while the page
+  // loads are covered too; stage_break() also updates a live page directly.
+  var hasOwn = Object.prototype.hasOwnProperty;
+  var BREAKS = null/*__mcp_breaks__*/;
+  if (BREAKS && typeof BREAKS === 'object') {
+    var armedBreaks = window.__mcp_tap_cfg.breaks || (window.__mcp_tap_cfg.breaks = {});
+    for (var bk in BREAKS) {
+      if (apply(hasOwn, BREAKS, [bk]) && !apply(hasOwn, armedBreaks, [bk])) armedBreaks[bk] = BREAKS[bk];
+    }
+  }
   function _push(e, siteId){
     var log = window.__mcp_vmp_log;
     if (log.length >= CAP) return;
@@ -149,8 +160,21 @@ INSTRUMENT_RUNTIME = r"""
     return r;
   };
   // ---- stage break: bounded deep capture for selected states ----
-  // Opt-in only: configured through stage_break(), which writes __mcp_tap_cfg.breaks.
+  // Opt-in only: stage_break() arms states in __mcp_tap_cfg.breaks.
   var SNAP_MAX_STR = 200;
+  var objectKeys = Object.keys;
+  var getOwnDesc = Object.getOwnPropertyDescriptor;
+  var isArray = Array.isArray;
+  var stringSplit = String.prototype.split;
+  var ErrorCtor = Error;
+  // Own data properties only: a getter is reported, never called. A Proxy
+  // still sees its ownKeys/getOwnPropertyDescriptor traps.
+  function _snapOwn(owner, key, depth, budget){
+    var d = getOwnDesc(owner, key);
+    if (!d) return {__t:'missing'};
+    if (!apply(hasOwn, d, ['value'])) return {__t:'accessor'};
+    return _snap(d.value, depth, budget);
+  }
   function _snap(v, depth, budget){
     if (v === null) return null;
     var t = typeof v;
@@ -161,37 +185,49 @@ INSTRUMENT_RUNTIME = r"""
         ? apply(stringSlice, v, [0, SNAP_MAX_STR]) + '...'
         : v;
     }
-    if (t === 'function' || t === 'symbol' || t === 'bigint') return {__t:t};
+    if (t !== 'object') return {__t:t};
     if (depth <= 0) return {__t:'object'};
     var i, out;
     try {
-      if (Object.prototype.toString.call(v) === '[object Array]') {
+      if (isArray(v)) {
         out = [];
         var len = v.length;
         var take = len > budget ? budget : len;
-        for (i = 0; i < take; i++) apply(arrayPush, out, [_snap(v[i], depth - 1, budget)]);
+        for (i = 0; i < take; i++) apply(arrayPush, out, [_snapOwn(v, i, depth - 1, budget)]);
         if (len > take) apply(arrayPush, out, [{__t:'truncated', length:len}]);
         return out;
       }
       out = {};
-      var keys = Object.keys(v);
+      var keys = objectKeys(v);
       var count = keys.length > budget ? budget : keys.length;
-      for (i = 0; i < count; i++) out[keys[i]] = _snap(v[keys[i]], depth - 1, budget);
+      for (i = 0; i < count; i++) {
+        // Assigning '__proto__' would replace the snapshot's prototype.
+        var name = keys[i] === '__proto__' ? '["__proto__"]' : keys[i];
+        out[name] = _snapOwn(v, keys[i], depth - 1, budget);
+      }
       if (keys.length > count) out.__truncated = keys.length;
       return out;
     } catch (e) { return {__t:'unreadable'}; }
   }
+  function _isProbeFrame(line){
+    // Gecko frames read name@url:line:col, V8 frames "at name (url:line:col)".
+    return apply(stringIndexOf, line, ['chrome://juggler']) !== -1 ||
+           apply(stringIndexOf, line, ['_stageStack']) !== -1 ||
+           apply(stringIndexOf, line, ['_maybeBreak']) !== -1 ||
+           apply(stringIndexOf, line, ['__mcp_tap_stage']) !== -1;
+  }
   function _stageStack(){
     var out = [];
     try {
-      var lines = String(new Error().stack || '').split('\n');
+      var lines = apply(stringSplit, stringifyPrimitive(new ErrorCtor().stack || ''), ['\n']);
       for (var i = 0; i < lines.length && out.length < 20; i++) {
         var line = lines[i];
-        // Drop the bridge frames: they describe this probe, not the target code.
-        if (apply(stringIndexOf, line, ['chrome://juggler']) !== -1) continue;
-        if (apply(stringIndexOf, line, ['__mcp_tap_stage']) !== -1) continue;
-        if (apply(stringIndexOf, line, ['_maybeBreak']) !== -1) continue;
-        apply(arrayPush, out, [line.replace(/^\s+/, '')]);
+        var j = 0;
+        while (j < line.length && (line[j] === ' ' || line[j] === '\t')) j++;
+        line = apply(stringSlice, line, [j]);
+        // Skip V8's message line and this probe's own frames.
+        if (!line || (i === 0 && apply(stringIndexOf, line, ['Error']) === 0) || _isProbeFrame(line)) continue;
+        apply(arrayPush, out, [line]);
       }
     } catch (e) {}
     return out;
@@ -199,7 +235,7 @@ INSTRUMENT_RUNTIME = r"""
   function _maybeBreak(p, list, ret, tag, siteId){
     var cfg = window.__mcp_tap_cfg;
     var breaks = cfg && cfg.breaks;
-    if (!breaks) return;
+    if (!breaks || !apply(hasOwn, breaks, [p])) return;
     var b = breaks[p];
     if (!b) return;
     if (b.limit > 0 && (b.hits || 0) >= b.limit) return;
@@ -214,6 +250,10 @@ INSTRUMENT_RUNTIME = r"""
 })();
 """
 
+
+# The literal the MCP replaces with the states armed by stage_break().
+BREAKS_PLACEHOLDER = "null/*__mcp_breaks__*/"
+assert INSTRUMENT_RUNTIME.count(BREAKS_PLACEHOLDER) == 1
 
 # ============ Regex-based rewrite ============
 
