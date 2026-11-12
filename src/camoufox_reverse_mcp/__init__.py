@@ -1,3 +1,3 @@
 """Camoufox Reverse MCP - Anti-detection browser MCP server for JS reverse engineering."""
 
-__version__ = "1.9.4"
+__version__ = "1.10.0"

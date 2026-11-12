@@ -4,6 +4,16 @@
 
 v1.1.1 起每个版本的完整说明在 [docs/releases](docs/releases)，发布包在 [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases)。
 
+## v1.10.0（2026-11-12）— 插桩默认值、离线改写、iframe 日志与 preset 主世界
+
+- `instrumentation`：`rewrite_calls` 默认改为关闭（调用改写会改变 `caller` 和递归深度），`max_file_size` 默认从 200KB 提到 2MB；原样放行和改写数到上限的文件逐个列出原因和建议值；新增 `action="rewrite_source"` 离线改写本地源码；每条事件带 `seq`、平坦化状态里的事件带 `stage`，`log` 支持 `after_seq`、`seq_window`、`stage` 切片并返回 `dropped`（#19 #20 #21 #25）
+- 同源 iframe 里的探针和插桩事件写进顶层日志，带 `frame_url`、`frame_depth`；`hook_jsvmp_interpreter` 返回 `coverage`，写明能记录和记录不到的范围（#23 #24）
+- `inject_hook_preset` 和 `pre_inject_hooks` 的 preset 改装到页面主世界，能记到页面自己的 XHR、fetch、cookie 读写；`remove_hooks` 能还原，`get_request_initiator` 改读主世界的日志
+- `compare_env` 补齐 canvas、WebGL、audio，传 `output_path` 导出完整环境包（#22）；新增 `stage_break` 和 `trace_session`（#26），工具变为 41 个
+- 感谢 [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) 的问题报告和贡献
+
+详情见 [v1.10.0](docs/releases/v1.10.0.md)。
+
 ## v1.9.4（2026-11-10）— 平坦化 VMP 阶段插桩
 
 - `instrumentation(action="install")` 新增 `tap_stage_calls`（默认关闭）：把控制流平坦化 JSVMP 的分发调用改写成逐状态的 `tap_stage` 事件，调用结果不变；`action="log"` 新增 `hot_stages` 统计，可以按状态号筛选

@@ -4,6 +4,16 @@
 
 Full notes for v1.1.1 and later are in [docs/releases](docs/releases) (Chinese). Packages are on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases).
 
+## v1.10.0 (2026-11-12) — Instrumentation Defaults, Offline Rewrite, Iframe Logs, Presets in the Main World
+
+- `instrumentation`: `rewrite_calls` is now off by default (call taps change `caller` and the recursion depth), and `max_file_size` defaults to 2 MB instead of 200 KB. Files passed through unchanged or capped at `max_rewrites` are listed with reasons and suggested values. New `action="rewrite_source"` rewrites local source without a browser. Every event has a `seq`, events inside a flattened-VMP state carry `stage`, and `log` slices with `after_seq`, `seq_window` and `stage` and reports `dropped` (#19 #20 #21 #25)
+- Probe and instrumentation events from same-origin iframes go to the top frame's log with `frame_url`/`frame_depth`; `hook_jsvmp_interpreter` returns `coverage`, listing what the probe records and what it cannot see (#23 #24)
+- Presets from `inject_hook_preset` and `pre_inject_hooks` run in the page main world and record the page's own XHR, fetch and cookie access; `remove_hooks` restores them and `get_request_initiator` reads their main-world logs
+- `compare_env` fills canvas, WebGL and audio and exports a full environment bundle with `output_path` (#22); adds `stage_break` and `trace_session` (#26), 41 tools in total
+- Thanks to [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) for the reports and contributions
+
+See the [Chinese release notes](docs/releases/v1.10.0.md).
+
 ## v1.9.4 (2026-11-10) — Stage Taps for Flattened VMPs
 
 - `instrumentation(action="install")` adds `tap_stage_calls` (off by default). It rewrites the dispatcher calls of control-flow-flattened JSVMPs into per-state `tap_stage` events without changing call results; `action="log"` adds `hot_stages` counts and can filter by state id
