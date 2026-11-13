@@ -170,47 +170,106 @@ trace_property_access(action="stop", mode="summary")
 > This tool drives Firefox's native RDP (`-start-debugger-server`) directly and
 > fills that gap — no Playwright, no browser extension.
 >
-> Works on Firefox 140+ (verified on camoufox 152 / reverse.5 and stock Firefox).
-> The executable is resolved automatically: `CAMOUFOX_EXE` env var → newest build
-> in the camoufox cache → system Firefox.
+> **Applies to**: the Firefox 140+ devtools protocol. The development machine runs
+> camoufox 152 / reverse.5, and both the smoke test and `--self-test` really run
+> against that build; stock Firefox was not exercised on this machine (whether the
+> port opens depends only on the two prefs below, not on the build).
 
-> **Security**: the RDP port is unauthenticated. Any local process that can connect
-> to `127.0.0.1:<port>` can execute code with the browser's privileges. Keep it
-> loopback-only, never forward or expose the port. If the port is busy the tool
-> reports an error and asks for another port; it never kills processes it did not
-> start.
+> **Launch path (shared with the server's launch_browser)**: `launch` does not
+> assemble its own command line. It reuses `camoufox.pkgman.launch_path()` to
+> resolve the **currently active** build (on macOS that is
+> `Camoufox.app/Contents/MacOS/camoufox`; it never falls back to "newest mtime"),
+> and it inherits `BrowserManager.default_config`: the `CAMOU_CONFIG` fingerprint,
+> the proxy, `--headless`, `--os`, `--locale`. The temporary profile gets a
+> `user.js` containing at least `devtools.debugger.remote-enabled=true`,
+> `devtools.chrome.enabled=true` and `devtools.debugger.prompt-connection=false`,
+> because `DevToolsStartup` only opens the debug port when the first two are true
+> (stock builds default `devtools.chrome.enabled` to false; an empty profile with
+> `MOZ_HEADLESS=1` or `-headless` never opens the port).
+>
+> **Not inherited** (stated, not silently degraded): proxy authentication
+> (`username`/`password` needs an interactive prompt, so requests through an
+> authenticated proxy fail instead of connecting directly and leaking the real
+> IP), `headless="virtual"` (no Xvfb wrapper here, treated as plain headless), and
+> the Playwright attach modes `browser_version` / `ws_endpoint`. When `camoufox`
+> itself is unavailable the launch degrades to a bare profile and says so in the
+> returned `warnings`.
+
+> **Security**: the debug port has no authentication, and opening it requires
+> `devtools.chrome.enabled=true`. That means **anyone who can connect to the port
+> can debug the browser's main process, i.e. execute arbitrary code as the current
+> OS user**, and other users on the same machine can connect to `127.0.0.1:<port>`
+> too. Therefore: the default port is a random free port on loopback only; on
+> macOS/Linux `unix_socket=true` puts the debugger behind a Unix socket inside a
+> 0700 temp directory (current user only); a busy port reports who holds it (this
+> session's browser still exiting, or another process) and suggests `port=0`; the
+> tool only kills processes it started, `atexit` + signal handlers close its own
+> browser when the MCP process exits, and a repeated `launch` closes the previous
+> session first.
 
 | Tool | Description |
 |------|-------------|
-| `rdp_debugger` | One tool with `action` dispatch (18 actions). Every blocking action runs inside `asyncio.to_thread`, so it never stalls the MCP event loop or Playwright's browser events |
+| `rdp_debugger` | One tool with `action` dispatch (20 actions). Every blocking action runs inside `asyncio.to_thread`, so it never stalls the MCP event loop or Playwright's browser events; calls on one session are serialized, so concurrent calls cannot swap results, and cancelling a request makes the worker exit |
 
 `action` reference:
 
 | action | What it does |
 |---|---|
-| launch | Start a browser with a debug port on an isolated profile (busy port -> error, no killing of foreign processes) |
-| attach | Connect to an already running debug port without launching |
-| enable | `listTabs -> getTarget -> threadActor`, then attach the thread; returns tab/target/thread |
-| sources | List known scripts, filterable by `url_substr` |
-| source | Fetch full script source; large scripts come back through longString chunks, optional `save_path` |
-| breakable_lines | Breakable line numbers of a script (check before setting a breakpoint) |
-| set_breakpoint | Set a breakpoint by `sourceId`; requires `line`, supports `column` / `condition` |
-| wait_paused | Wait for the next pause; returns frame / where / why (breakpoint, debuggerStatement, XHR) |
-| frames | Full call stack of the current pause |
+| launch | Start a browser with a debug port (random free port by default; inherits the server config; closes a previous session first) |
+| attach | Connect to an already running debug port (`port`, or `socket_path` on macOS/Linux) |
+| enable | `listTabs -> getTarget -> threadActor`, then attach the thread; detaches the previous target first and never jumps back to the first tab |
+| sources | List known scripts (with `sourceStartLine` / `sourceLength`), filterable by `url_substr` |
+| source | Fetch full script source; longString chunks advance by UTF-16 code units and `truncated` is explicit past `max_chars` |
+| breakable_lines | Breakable line numbers of a script |
+| breakable_positions | Breakable positions of a script (or one line): `columns_0based` / `columns_1based` |
+| set_breakpoint | Set a breakpoint: `source_url` uses `sourceUrl` (inline scripts and post-navigation sources get it automatically), `source` uses `sourceId` (eval / `new Function`); `column` is 1-based and snaps to the nearest breakable column; a line without breakable positions returns `installed: false` |
+| remove_breakpoint | Remove line breakpoints using the exact location they were set with; pass `line`/`source`/`source_url`/`url_substr`, or `remove_all=true` to clear everything |
+| wait_paused | Wait for the next pause; only accepts a `paused` that arrived after `resume`/`step`/`interrupt`; returns frame / where / why |
+| frames | Full call stack of the current pause; returns `{"error": "wrongState"}` when not paused |
 | scopes | Recursive scope chain and bindings of one frame; requires `frame_actor` |
-| evaluate | With `frame_actor`, evaluate in that paused frame (locals readable); without it, global page eval |
-| step | Step `over` / `into` / `out` |
+| evaluate | With `frame_actor`, evaluate in that paused frame (locals readable); otherwise global page eval. A breakpoint hit returns `paused-while-evaluating` immediately instead of timing out; longString results are materialized |
+| step | Step `over` / `into` / `out` (a bad direction errors out); `wrongState` is not reported as stepped |
 | resume | Resume execution |
-| interrupt | Pause without a line breakpoint (single-line JSVMP) |
-| reload | Reload and rebuild the session, re-applying every breakpoint (actors are recreated on navigation) |
-| xhr_breakpoint | Pause when a request is about to be sent; matches fetch and XHR; `method="remove"` removes it |
-| status | Session state (port, tab, target, thread, last pause reason, breakpoints) |
+| interrupt | Pause without a line breakpoint (single-line JSVMP). `on_next=true` sends the string `when="onNext"` and pauses on the next statement |
+| reload | Reload and rebuild the session: detaches the old target first (otherwise xhr breakpoints on the old thread freeze the page), polls until the new threadActor exists, then attaches and re-applies every breakpoint without a fixed sleep. Breakpoints set by `sourceId` only (eval / `new Function`) cannot survive navigation and are reported in `reapply_skipped` |
+| xhr_breakpoint | Pause when a request is about to be sent; matches fetch and XHR; `remove=true` removes it with the exact path+method it was set with |
+| status | Session state (port / unix socket, tab, target, thread, last pause reason, breakpoints) |
 | close | End the session and close the browser this session launched |
 
-Two verified gotchas:
+Coordinates and verified gotchas:
 
-- `thread.attach` must carry `options:{}`, otherwise the thread stays DETACHED, `sources` stays 0 and nothing is reported.
-- `setXHRBreakpoint` requires `method` to be `"ANY"` or a real verb; an empty string never matches.
+- **Lines are 1-based**; `breakable_lines` / `breakable_positions` report exactly the
+  coordinate space breakpoints use: inline scripts are in **HTML document lines**
+  (`sourceStartLine` is the `<script>` line, breakable lines start on the next one),
+  while `eval` / `new Function` use their own source line numbering.
+- **Columns are 0-based and must land on a breakable position** (the server looks up
+  `column + columnBase` exactly), while `Error.stack` and the DevTools UI are
+  1-based. The tool's `column` argument is 1-based, subtracts one internally, snaps
+  to the nearest breakable column and reports `snapped_from_column_1based` /
+  `breakable_columns_0based`. For minified single-line files and JSVMP, look at
+  `breakable_positions` first.
+- With `location.sourceUrl`, Firefox keys the breakpoint by URL, so the second and
+  later inline scripts of the same HTML document — and sources created after a
+  reload/navigation — get it applied automatically. Removal is keyed by
+  `sourceUrl:sourceId:line:column`, so `remove_breakpoint` re-sends the original
+  location verbatim. Conversely, a breakpoint set by `source` (sourceId only) is
+  bound to one source actor that disappears on navigation; `reload` reports those in
+  `reapply_skipped` — use `source_url` for anything that must survive a reload.
+- `thread.attach` must carry `options:{}`, otherwise the thread stays DETACHED,
+  `sources` stays 0 and nothing is reported.
+- `setXHRBreakpoint` requires `method` to be `"ANY"` or a real verb; an empty string
+  never matches. Removal is an exact path+method match too, so `"remove"` cannot be
+  used as the method (the tool re-sends the pair recorded at set time).
+- Navigation recreates target/thread actors and the old target must be detached;
+  `reload` does both.
+- Long strings (script source, big evaluation results) arrive as a `longString` grip
+  (`{type:"longString", actor, length}`); the body must be fetched with `substring`
+  in UTF-16 code units. `source` and `evaluate` fetch it for you and set
+  `truncated: true` past `max_chars`.
+- Concurrency: calls on one session are serialized by a lock, and when the client
+  cancels a request the worker thread exits instead of continuing to read the same
+  socket.
+
 
 ## Usage Scenarios
 
