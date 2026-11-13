@@ -4,6 +4,17 @@
 
 v1.1.1 起每个版本的完整说明在 [docs/releases](docs/releases)，发布包在 [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases)。
 
+## 未发布 — Firefox RDP 断点调试
+
+- 新增 `rdp_debugger(action=...)`：走 Firefox 原生 RDP（`-start-debugger-server`）补齐「真断点 / 单步 / 调用栈 / 作用域 / 暂停中求值 / 请求断点」。Firefox 没有 CDP，Playwright 侧只能事后回放，这个工具解决"停在某一行看局部变量"的需求；`action` 支持 `launch`、`attach`、`enable`、`sources`、`source`、`breakable_lines`、`breakable_positions`、`set_breakpoint`、`remove_breakpoint`、`wait_paused`、`frames`、`scopes`、`evaluate`、`step`、`resume`、`interrupt`、`reload`、`xhr_breakpoint`、`status`、`close`
+- `evaluate` 可在不暂停的情况下驱动页面自身逻辑（点按钮、调用页面函数），不必再依赖 Playwright 交互；`xhr_breakpoint` 在请求发出前暂停，`fetch` 与 XHR 都命中，适合抓 `data` 这类被混淆代码构造的入参
+- 工具为 `async def`，socket 收发与等待都在 `asyncio.to_thread` 里执行，不会阻塞 MCP 事件循环和 Playwright 那边的浏览器事件；同一会话的调用用一把锁串行化（并发调用不会再串结果），客户端取消请求后工作线程会退出
+- 启动改为和 `launch_browser` 共用一套配置：可执行文件用 `camoufox.pkgman.launch_path()` 解析**当前激活**版本（macOS 落到 `Camoufox.app/Contents/MacOS/camoufox`，不再按 mtime 取最新），并继承 `CAMOU_CONFIG` 指纹、代理、`--headless`、`--os`、`--locale`；临时 profile 写入 `user.js`（`devtools.debugger.remote-enabled`、`devtools.chrome.enabled`、`devtools.debugger.prompt-connection`），否则 `-start-debugger-server` 根本不开端口。默认端口改为随机空闲端口；重复 `launch`/`attach` 先关旧会话，MCP 退出时用 `atexit` + 信号处理收尾；macOS/Linux 支持 0700 临时目录里的 Unix socket
+- 消息分发修好：`resume`/`step`/`interrupt` 之后只接受新到的 `paused`（旧的不会被当成新的）；`call()` 按 actor 排队匹配回复，同一 actor 推来的事件不会再被当成回复，错误回复按 `message` 里的请求类型分辨是否迟到；`drain()` 有总预算、事件缓冲封顶，`newSource` 洪水不会再挡住请求
+- 断点修好：改为 `location.sourceUrl` 定位（同一 HTML 的第二段及以后的内联脚本、导航后新建的 source 都能挂上），并支持直接传 source actor 断 `eval` / `new Function`；`remove_breakpoint` 按当初的 location 精确删除；`xhr_breakpoint` 用设置时的 path+method 移除（`"remove"` 不再被当 method 发出去）；新增 `breakable_positions` 列出可停列，列号按 1-based 收、内部转 0-based 并吸附，行上不可停时返回 `installed: false` 而不是 ok；`reload` 先 detach 旧 target，再在页面加载期间立即重下断点
+- 工具层不再把错误变成成功：`frames` / `scopes` / `step` / `evaluate` 收到 `wrongState`、`noSuchActor` 等回复时返回 `{"error": ...}`；表达式命中断点时立刻返回 `paused-while-evaluating`，不会再等满超时给一堆 `null`；`source` 取长脚本按 UTF-16 码元分片（含 emoji 不会错位或半个字符），`max_chars` 截断显式标记；`step` 的 `direction` 写错报错而不是 `KeyError`
+- `--self-test` 改为 `about:blank` + 注入脚本，不再访问第三方站点；冒烟测试与自测都在本机 camoufox 152 reverse.5 上实跑通过，**官方 Firefox 未在本机验证**（端口能否打开只取决于上面两个 pref）；协议层单元测试覆盖分帧、回复匹配、并发串行化、取消、新到 `paused`、`newSource` 洪水、含 emoji 的 longString、断点安装/吸附/删除、xhr 移除、reload 重下、工作区启动配置与 macOS 路径解析
+
 ## v1.10.0（2026-11-12）— 插桩默认值、离线改写、iframe 日志与 preset 主世界
 
 - `instrumentation`：`rewrite_calls` 默认改为关闭（调用改写会改变 `caller` 和递归深度），`max_file_size` 默认从 200KB 提到 2MB；原样放行和改写数到上限的文件逐个列出原因和建议值；新增 `action="rewrite_source"` 离线改写本地源码；每条事件带 `seq`、平坦化状态里的事件带 `stage`，`log` 支持 `after_seq`、`seq_window`、`stage` 切片并返回 `dropped`（#19 #20 #21 #25）

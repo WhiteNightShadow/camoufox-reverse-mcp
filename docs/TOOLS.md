@@ -139,6 +139,98 @@ launch_browser(
 PID，不会清理或开关其他 MCP 实例。开启 engine trace 时会临时关闭 Firefox
 content sandbox 以允许内容进程写入；普通启动不会改动 sandbox。
 
+### Firefox RDP 断点调试
+
+> **为什么需要这一组**：camoufox 是 Firefox，Playwright 侧走 Juggler，没有 CDP。
+> Playwright 拿不到「停在某一行、看局部变量、单步」。这一组直接开 Firefox 原生
+> RDP（`-start-debugger-server`），把等价能力补齐，全程不经过 Playwright，
+> 也不需要浏览器扩展。
+>
+> **适用**：Firefox 140+ 的 devtools 协议。开发机上是 camoufox 152 / reverse.5，
+> 冒烟测试与 `--self-test` 都在这套构建上实跑通过；官方 Firefox 未在本机验证过
+> （端口能否打开只取决于下面这两个 pref，与具体构建无关）。
+
+> **启动方式（和服务端的 launch_browser 保持一致）**：`launch` 不自己拼命令行，
+> 而是复用 `camoufox.pkgman.launch_path()` 解析**当前激活**版本的可执行文件
+> （macOS 自动落到 `Camoufox.app/Contents/MacOS/camoufox`，不会退化成按 mtime 取
+> 最新），并继承 `BrowserManager.default_config`：`CAMOU_CONFIG` 指纹、代理、
+> `--headless`、`--os`、`--locale`。临时代理 profile 里会写 `user.js`，至少包含
+> `devtools.debugger.remote-enabled=true`、`devtools.chrome.enabled=true`、
+> `devtools.debugger.prompt-connection=false` —— `DevToolsStartup` 要求前两个都为
+> true 才开调试端口（官方构建里 `devtools.chrome.enabled` 默认 false，空 profile 下
+> `MOZ_HEADLESS=1` / `-headless` 都开不了端口）。
+>
+> **不继承的部分**（明说，不静默降级）：代理认证（`username`/`password` 需要交互
+> 弹窗，带认证的代理上请求会失败，不会直连泄漏真实 IP）、`headless="virtual"`
+> （没有 Xvfb 包装，按普通 headless 处理）、`browser_version` 与 `ws_endpoint`
+> 这类 Playwright attach 模式。`camoufox` 不可用时退化成裸 profile 启动并在返回值的
+> `warnings` 里说明指纹/代理没有继承。
+
+> **安全**：调试端口没有认证，而且它能打开的前提是 `devtools.chrome.enabled=true`
+> —— 也就是说**能连上端口的人可以调试浏览器主进程，可以用当前系统用户的身份执行
+> 任意代码**；同一台机器上其他用户也能连 `127.0.0.1:<port>`。因此：默认端口取随机的
+> 空闲端口、只监听 loopback；macOS/Linux 可以用 `unix_socket=true` 把调试口放进权限
+> 0700 临时目录里的 Unix socket（只有当前用户能连）；端口被占用时报错会说明是谁占着
+> （自己的浏览器还没退完 / 别的进程），并建议 `port=0`；本工具只清理自己启动的进程，
+> MCP 退出时（`atexit` + 信号处理）会把自己的浏览器一起关掉，重复 `launch` 会先关旧会话。
+
+| 工具 | 说明 |
+|------|------|
+| `rdp_debugger` | 单个工具 + `action` 分发（20 个动作），所有阻塞动作都在 `asyncio.to_thread` 里执行，不会卡住 MCP 事件循环和 Playwright 那边的浏览器事件；同一会话的调用在协议层串行化，并发调用不会串结果，客户端取消请求会让工作线程退出 |
+
+`action` 一览：
+
+| action | 作用 |
+|---|---|
+| launch | 启动带调试端口的浏览器（默认随机空闲端口；继承服务端配置；已有会话先关掉） |
+| attach | 连到已在运行的调试端口（`port`，或 macOS/Linux 的 `socket_path`） |
+| enable | `listTabs → getTarget → threadActor` 并 attach 线程；先 detach 旧 target，不跳回第一个标签页 |
+| sources | 列出线程已知脚本（含 `sourceStartLine` / `sourceLength`），可按 `url_substr` 过滤 |
+| source | 取脚本全文；longString 分片按 UTF-16 码元拼接，超 `max_chars` 显式标记 `truncated` |
+| breakable_lines | 某脚本的可断行号 |
+| breakable_positions | 某脚本（或某一行）的可停位置：`columns_0based` / `columns_1based` |
+| set_breakpoint | 下断点：`source_url` 走 `sourceUrl`（内联脚本、导航后都挂得上），`source` 走 `sourceId`（eval / `new Function`）；`column` 收 1-based 并吸附到最近可停列；行上不可停时返回 `installed: false` |
+| remove_breakpoint | 删行断点：按当初下发的 location 精确删除；要给 `line`/`source`/`source_url`/`url_substr` 之一，或 `remove_all=true` 清空 |
+| wait_paused | 等下一次命中，只接受 `resume`/`step`/`interrupt` 之后新到的 `paused`，返回 frame / where / why |
+| frames | 当前暂停的完整调用栈；不处于暂停态时返回 `{"error": "wrongState"}` |
+| scopes | 某帧的递归作用域链与各层 bindings（变量值），需要 `frame_actor` |
+| evaluate | 给了 `frame_actor` 就在暂停帧内求值（能读局部变量），否则页面全局求值；表达式命中断点时立刻返回 `paused-while-evaluating` 而不是等超时；longString 结果自动取回全文 |
+| step | 单步：`over` / `into` / `out`（写错报错），`wrongState` 不报 stepped |
+| resume | 继续运行 |
+| interrupt | 不依赖行断点直接暂停（单行 JSVMP 无从下断时用）；`on_next=true` 发字符串 `when="onNext"`，暂停在下一个语句 |
+| reload | 刷新页面并重建会话：先 detach 旧 target（否则旧 thread 的 XHR 断点会把页面冻住），轮询到新 threadActor 就 attach 并重下断点，不等固定 sleep；只按 `sourceId` 下的断点（eval / `new Function`）导航后必然失效，会在 `reapply_skipped` 里说明 |
+| xhr_breakpoint | 在「请求即将发出」处暂停，fetch 与 XHR 都命中；`remove=true` 用设置时的 path+method 精确移除 |
+| status | 会话状态（端口 / unix socket、tab、target、thread、最近一次暂停原因、已下断点） |
+| close | 结束会话并关闭本次启动的浏览器 |
+
+坐标与实测坑：
+
+- **行号 1-based**；`breakable_lines` / `breakable_positions` 报出来的就是下断点用的
+  那套坐标：内联脚本是 **HTML 文档行号**（`sourceStartLine` 是 `<script>` 所在行，
+  可断行从下一行开始），`eval` / `new Function` 用它自己源码的行号。
+- **列号 0-based，而且必须正好落在可停位置**（服务端按 `column + columnBase` 精确
+  查找），`Error.stack` / DevTools 界面的列号是 1-based。工具的 `column` 参数按
+  1-based 收，内部减 1 再吸附到最近可停列，并在 `snapped_from_column_1based` /
+  `breakable_columns_0based` 里说明；单行压缩文件和 JSVMP 先用 `breakable_positions`
+  看清有哪些列。
+- `set_breakpoint` 用 `location.sourceUrl` 时，Firefox 会把断点**按 URL** 记下来，
+  同一 HTML 里第二段及以后的内联脚本、页面刷新/跳转后新建的 source 都会自动应用；
+  删除时服务端的 key 是 `sourceUrl:sourceId:line:column`，所以必须原样重发，
+  `remove_breakpoint` 就是这么做的。反过来，只用 `source`（sourceId）下的断点绑定在
+  某个 source actor 上，导航后那个 actor 就没了，`reload` 会在 `reapply_skipped` 里
+  明确报告重下不了 —— 需要跨导航的断点请用 `source_url`。
+- `thread.attach` 必须带 `options:{}`，否则线程停在 DETACHED，`sources` 恒为 0 且不报错。
+- `setXHRBreakpoint` 的 `method` 必须是 `"ANY"` 或真实方法名，传空串永不匹配；移除
+  同样是 path+method 精确匹配，所以不能用 `"remove"` 当 method（工具会重发当初设置
+  时的那一对）。
+- 导航后 target/thread actor 会全部换新，旧 target 必须 detach；`reload` 会自动完成。
+- 长字符串（脚本源码、大的求值结果）是 `longString` grip（`{type:"longString",
+  actor, length}`），正文要用 `substring` 按 UTF-16 码元分片取；`source` 和
+  `evaluate` 都会自动取回，超过 `max_chars` 时返回值里 `truncated: true`。
+- 并发：同一会话的调用被一把锁串行化；客户端取消请求后工作线程会退出（不会再继续
+  读同一个 socket）。
+
+
 ## 使用场景示例
 
 ### 场景 1：逆向登录接口的签名参数

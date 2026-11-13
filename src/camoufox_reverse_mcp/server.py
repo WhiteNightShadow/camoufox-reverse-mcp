@@ -42,6 +42,7 @@ from .tools import verification     # noqa: E402, F401  — verify_signer_offlin
 from .tools import trace            # noqa: E402, F401  — trace_property_access + list/query
 from .tools import stage_break      # noqa: E402, F401  — stage_break(state capture)
 from .tools import trace_session    # noqa: E402, F401  — trace_session(Playwright trace)
+from .tools import debugger_rdp     # noqa: E402, F401  — rdp_debugger（Firefox RDP 断点调试，非 CDP）
 
 # Normalize eagerly for code that inspects FastMCP's manager directly. The
 # list_tools override also covers tools registered later at runtime.

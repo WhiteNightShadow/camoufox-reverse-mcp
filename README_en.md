@@ -134,7 +134,7 @@ The client should launch the browser and return the title `Example Domain`. If s
 
 ## Tools
 
-41 tools in 9 groups. See the [tool reference](docs/TOOLS_en.md) for details and usage scenarios.
+42 tools in 10 groups. See the [tool reference](docs/TOOLS_en.md) for details and usage scenarios.
 
 | Group | Count | What it covers |
 |---|---:|---|
@@ -144,6 +144,7 @@ The client should launch the browser and return the title `Example Domain`. If s
 | [Hooking & Tracing](docs/TOOLS_en.md#hooking--tracing) | 5 | Function hooks and traces, preset hooks, console logs |
 | [Network Analysis](docs/TOOLS_en.md#network-analysis) | 8 | Capture, intercept, initiator stacks, compare, export |
 | [JSVMP Reverse Analysis](docs/TOOLS_en.md#jsvmp-reverse-analysis) | 4 | Runtime probes, source instrumentation, state-level capture, environment fingerprints and bundles |
+| [Firefox RDP Debugging](docs/TOOLS_en.md#firefox-rdp-debugging) | 1 | Real breakpoints, stepping, call stacks, scopes, paused-frame evaluation, request breakpoints (native Firefox RDP, no CDP needed) |
 | [Cookies & Storage](docs/TOOLS_en.md#cookies--storage) | 4 | Cookies, storage, browser state import and export |
 | [Verification & Environment](docs/TOOLS_en.md#verification--environment) | 3 | Offline signer checks, self-check, residual cleanup |
 | [Native PropertyTracer](docs/TOOLS_en.md#native-propertytracer) | 3 | Native Gecko property tracing, needs the custom browser build |
