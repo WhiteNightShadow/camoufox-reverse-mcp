@@ -56,6 +56,14 @@ def test_readme_tool_counts_match_the_server(name):
     assert re.search(rf"^(共 )?{sum(counts)}( 个工具，分| tools in) {len(counts)}", text, re.M)
 
 
+@pytest.mark.parametrize("name", TOOL_DOCS)
+def test_tool_docs_counts_match_the_server(name):
+    text = read(name)
+    total = len(registered_tools())
+    groups = len(re.findall(r"^### ", text.split("\n## ")[1], re.M))
+    assert re.search(rf"^(共 )?{total}( 个工具，按用途分| tools in) {groups}", text, re.M)
+
+
 @pytest.mark.parametrize("name", READMES)
 def test_readme_has_no_version_sections_before_the_install_steps(name):
     text = read(name)

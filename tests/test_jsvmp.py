@@ -280,6 +280,8 @@ def test_new_tools_registered():
         "network_capture", "scripts", "search_code", "hook_function",
         "instrumentation", "cookies", "check_environment", "reset_browser_state",
         "launch_browser", "navigate", "evaluate_js", "verify_signer_offline",
+        # Firefox RDP debugger (breakpoints / stepping / scopes)
+        "rdp_debugger",
     }
     missing = expected - tool_names
     assert not missing, f"Missing tools: {missing}"
