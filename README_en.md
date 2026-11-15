@@ -193,7 +193,7 @@ See [CHANGELOG_en.md](CHANGELOG_en.md) for every version.
 
 - [@tuntun1337](https://github.com/tuntun1337) — strict JSON Schema compatibility
 - [@Code-xy](https://github.com/Code-xy) — Windows engine-trace diagnosis and validation
-- [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP execution-site requirements and analysis materials, `tap_stage_calls` stage taps for `instrumentation`, `stage_break` and `trace_session`, and the #19–#25 reports addressed in v1.10.0
+- [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP execution-site requirements and analysis materials, `tap_stage_calls` stage taps for `instrumentation`, `stage_break` and `trace_session`, `rdp_debugger` Firefox RDP debugging, and the #19–#25 reports addressed in v1.10.0
 - [@dsaw1111](https://github.com/dsaw1111) — Camoufox 152 version-gap and PropertyTracer upgrade request
 - [@chung1912](https://github.com/chung1912) — `uvx` install suggestion and `uv tool install` setup
 - [@tunguyen1993](https://github.com/tunguyen1993) — `script_url` escaping report and fix for `hook_jsvmp_interpreter`

@@ -2,14 +2,14 @@
 
 [中文](TOOLS.md) | [English](TOOLS_en.md)
 
-39 tools in 9 groups. See the [README](../README_en.md) for installation and server options.
+42 tools in 10 groups. See the [README](../README_en.md) for installation and server options.
 
-- [Available Tools](#available-tools-39)
+- [Available Tools](#available-tools-42)
 - [Usage Scenarios](#usage-scenarios)
 - [Architecture](#architecture)
 - [Why Camoufox?](#why-camoufox)
 
-## Available Tools (39)
+## Available Tools (42)
 
 ### Browser Control
 | Tool | Description |
@@ -170,17 +170,18 @@ trace_property_access(action="stop", mode="summary")
 > This tool drives Firefox's native RDP (`-start-debugger-server`) directly and
 > fills that gap — no Playwright, no browser extension.
 >
-> **Applies to**: the Firefox 140+ devtools protocol. The development machine runs
-> camoufox 152 / reverse.5, and both the smoke test and `--self-test` really run
-> against that build; stock Firefox was not exercised on this machine (whether the
-> port opens depends only on the two prefs below, not on the build).
+> **Applies to**: the Firefox 140+ devtools protocol. Exercised end-to-end with
+> `--self-test` and the live browser smoke test on both Windows (camoufox 152 /
+> reverse.5) and macOS (official Camoufox 158 `Camoufox.app`, non-Camoufox Firefox
+> Nightly, and `unix_socket=true`).
 
 > **Launch path (shared with the server's launch_browser)**: `launch` does not
 > assemble its own command line. It reuses `camoufox.pkgman.launch_path()` to
-> resolve the **currently active** build (on macOS that is
-> `Camoufox.app/Contents/MacOS/camoufox`; it never falls back to "newest mtime"),
-> and it inherits `BrowserManager.default_config`: the `CAMOU_CONFIG` fingerprint,
-> the proxy, `--headless`, `--os`, `--locale`. The temporary profile gets a
+> resolve the **currently active** build without triggering auto-downloads (on macOS
+> that is `Camoufox.app/Contents/MacOS/camoufox`; it never falls back to "newest
+> mtime"), and it inherits `BrowserManager.default_config`: the `CAMOU_CONFIG`
+> fingerprint, the proxy, `--headless`, `--os`, `--locale` and `browser_version`.
+> The temporary profile gets a
 > `user.js` containing at least `devtools.debugger.remote-enabled=true`,
 > `devtools.chrome.enabled=true` and `devtools.debugger.prompt-connection=false`,
 > because `DevToolsStartup` only opens the debug port when the first two are true
@@ -191,9 +192,10 @@ trace_property_access(action="stop", mode="summary")
 > (`username`/`password` needs an interactive prompt, so requests through an
 > authenticated proxy fail instead of connecting directly and leaking the real
 > IP), `headless="virtual"` (no Xvfb wrapper here, treated as plain headless), and
-> the Playwright attach modes `browser_version` / `ws_endpoint`. When `camoufox`
-> itself is unavailable the launch degrades to a bare profile and says so in the
-> returned `warnings`.
+> the Playwright attach mode `ws_endpoint`. When a non-Camoufox Firefox executable
+> (without `properties.json`) is passed or `camoufox` is unavailable, the launch
+> degrades to a bare profile (proxy and RDP prefs are still written to `user.js`)
+> and says so in the returned `warnings`.
 
 > **Security**: the debug port has no authentication, and opening it requires
 > `devtools.chrome.enabled=true`. That means **anyone who can connect to the port
@@ -353,14 +355,17 @@ recorded when a state returns, so nested states come first; a state that throws 
 │              camoufox-reverse-mcp                │
 │  ┌──────────┬──────────┬──────────┬──────────┐  │
 │  │Navigation│ Script   │Debugging │ Hooking  │  │
-│  │          │ Analysis │          │          │  │
+│  │          │ Analysis │ / RDP    │          │  │
 │  ├──────────┼──────────┼──────────┼──────────┤  │
 │  │ Network  │ JSVMP    │  Cookie  │  Verify  │  │
 │  │ Capture  │ Analysis │ Storage  │  Signer  │  │
-│  └──────────┴──────────┴──────────┴──────────┘  │
-│                    ↕ Playwright API               │
+│  ├──────────┴──────────┴──────────┴──────────┤  │
+│  │ ★ PropertyTracer (trace_property_access)  │  │
+│  │   Native Gecko property tracing               │  │
+│  └───────────────────────────────────────────┘  │
+│       ↕ Playwright API      ↕ Firefox Native RDP │
 ├─────────────────────────────────────────────────┤
-│      Camoufox (Anti-detection Firefox, Juggler)  │
+│     Camoufox (Anti-detection Firefox, Juggler)   │
 │  C++ engine-level fingerprint spoofing           │
 └─────────────────────────────────────────────────┘
 ```

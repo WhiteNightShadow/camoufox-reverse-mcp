@@ -18,7 +18,9 @@
 import asyncio
 import json
 import os
+import signal
 import socket
+import tempfile
 import threading
 import time
 from collections import deque
@@ -736,11 +738,81 @@ def test_build_launch_plan_degrades_without_camoufox(tmp_path, monkeypatch):
     assert any("launch_options" in warning for warning in plan["warnings"])
 
 
-def test_launch_plan_requires_a_debug_transport():
-    """既没有 port 也没有 unix_path 时命令行不会带调试端口 —— 必须直接报错。"""
+def test_launch_plan_requires_a_debug_transport(monkeypatch):
+    """既没有 port 也没有 unix_path 时命令行不会带调试端口 —— 必须直接报错，且不能先调 launch_options。"""
+    import camoufox.utils as cfx_utils
+
+    calls: list[bool] = []
+
+    def must_not_run(**kwargs):
+        calls.append(True)
+        return {}
+
+    monkeypatch.setattr(cfx_utils, "launch_options", must_not_run)
     with pytest.raises(RdpError) as excinfo:
         build_launch_plan(port=0, url="about:blank")
     assert "port" in str(excinfo.value)
+    assert calls == [], "缺少调试端口时不应提前执行 launch_options"
+
+
+def test_detect_executable_never_triggers_camoufox_download(tmp_path, monkeypatch):
+    """探测浏览器路径时绝不能触发 camoufox_path(download_if_missing=True) 自动下载。"""
+    pkgman = pytest.importorskip("camoufox.pkgman")
+    downloads: list[bool] = []
+
+    def guarded_camoufox_path(download_if_missing: bool = True, *args, **kwargs):
+        if download_if_missing:
+            downloads.append(True)
+        raise FileNotFoundError("camoufox browser not installed")
+
+    guarded_camoufox_path.__module__ = "camoufox.pkgman"
+    monkeypatch.setattr(pkgman, "camoufox_path", guarded_camoufox_path)
+    monkeypatch.setattr(pkgman, "INSTALL_DIR", tmp_path / "empty-install", raising=False)
+    monkeypatch.setattr(camoufox_runtime, "inspect_camoufox_runtime",
+                        lambda: {"installed": [], "active": None})
+    monkeypatch.delenv("CAMOUFOX_EXE", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CAMOUFOX_INSTALL_DIR", str(tmp_path / "empty-cache"))
+
+    fake_ff = tmp_path / "firefox"
+    fake_ff.write_bytes(b"")
+    import camoufox_reverse_mcp.debugger_rdp_tools as rdp_mod
+
+    monkeypatch.setattr(rdp_mod.shutil, "which", lambda name: str(fake_ff) if name == "firefox" else None)
+    orig_is_file = Path.is_file
+    monkeypatch.setattr(Path, "is_file",
+                        lambda self: orig_is_file(self) if str(self).startswith(str(tmp_path)) else False)
+    assert detect_browser_executable() == str(fake_ff)
+    assert downloads == [], "detect_browser_executable 触发了 camoufox 自动下载"
+
+
+def test_build_launch_plan_stock_firefox_skips_camoufox_download(tmp_path, monkeypatch):
+    """传入非 Camoufox 的官方 Firefox（无 properties.json）时，不触发下载也不注入 CAMOU_CONFIG。"""
+    pkgman = pytest.importorskip("camoufox.pkgman")
+    downloads: list[bool] = []
+
+    def guarded_camoufox_path(download_if_missing: bool = True, *args, **kwargs):
+        if download_if_missing:
+            downloads.append(True)
+        raise FileNotFoundError("camoufox browser not installed")
+
+    guarded_camoufox_path.__module__ = "camoufox.pkgman"
+    monkeypatch.setattr(pkgman, "camoufox_path", guarded_camoufox_path)
+
+    stock_ff = tmp_path / "firefox"
+    stock_ff.write_bytes(b"")
+    plan = build_launch_plan(
+        port=6123,
+        profile=tmp_path,
+        exe=str(stock_ff),
+        config={"proxy": {"server": "http://127.0.0.1:7890"}},
+    )
+    assert downloads == [], "build_launch_plan 对非 Camoufox 可执行文件触发了自动下载"
+    assert plan["executable"] == str(stock_ff)
+    assert plan["fingerprint_config"] is False
+    assert plan["prefs"]["network.proxy.http_port"] == 7890
+    assert all(key in plan["prefs"] for key in RDP_PREFS)
+    assert any("properties.json" in w or "launch_options" in w for w in plan["warnings"])
 
 
 def test_launch_plan_marks_headless_arg(tmp_path, monkeypatch):
@@ -1385,6 +1457,313 @@ async def test_cancelled_tool_call_signals_the_worker(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await task
     assert calls.get("reason"), "取消后没有给工作线程发取消信号"
+
+
+def test_wait_paused_recovers_after_request_cancel():
+    """取消一次 wait_paused 后，下一次 wait_paused 不能因为残留 _cancel 立刻返回 None。"""
+    client_sock, server_sock = socket.socketpair()
+    try:
+        rdp = RdpClient(sock=client_sock, timeout=2.0)
+        dbg = FireFoxDebugger(port=1)
+        dbg.rdp = rdp
+        dbg.thread = "thread1"
+
+        dbg.request_cancel("client cancelled previous wait_paused")
+
+        payload = json.dumps({
+            "from": "thread1",
+            "type": "paused",
+            "frame": {"actor": "frame1", "where": {"line": 7, "column": 0}},
+            "why": {"type": "debuggerStatement"},
+        }).encode("utf-8")
+        server_sock.sendall(b"%d:%s" % (len(payload), payload))
+
+        found = dbg.wait_paused(timeout=2.0)
+        assert found is not None, "取消后的下一次 wait_paused 被残留 _cancel 立即吞掉"
+        assert found["frame"]["actor"] == "frame1"
+    finally:
+        client_sock.close()
+        server_sock.close()
+
+
+def test_attach_unix_socket_close_preserves_external_socket(tmp_path, monkeypatch):
+    """attach 到外部浏览器的 Unix socket 时，close() 不能删掉对方的 socket 文件与目录。"""
+    import camoufox_reverse_mcp.debugger_rdp_tools as rdp_mod
+
+    sock_dir = tmp_path / "rdp_sock_external"
+    sock_dir.mkdir()
+    sock_file = sock_dir / "rdp.sock"
+    sock_file.write_bytes(b"")
+
+    client_sock, server_sock = socket.socketpair()
+    hello = json.dumps({"from": "root", "applicationType": "browser", "traits": {}}).encode("utf-8")
+    server_sock.sendall(b"%d:%s" % (len(hello), hello))
+    monkeypatch.setattr(rdp_mod, "_connect_unix", lambda path, timeout: client_sock)
+
+    try:
+        dbg = FireFoxDebugger()
+        info = dbg.attach(unix_path=str(sock_file))
+        assert info["unix_socket"] == str(sock_file)
+        dbg.close()
+        assert sock_file.exists(), "attach 模式的 close() 误删了外部浏览器的 Unix socket"
+        assert sock_dir.exists(), "attach 模式的 close() 误删了外部浏览器的目录"
+    finally:
+        client_sock.close()
+        server_sock.close()
+
+
+@pytest.mark.asyncio
+async def test_install_cleanup_registers_signals_from_main_thread_after_worker(monkeypatch):
+    """工作线程先调 install_cleanup 失败后，主线程进入 rdp_debugger(launch) 仍须装上信号处理。"""
+    sig = getattr(signal, "SIGTERM", None)
+    if sig is None:
+        pytest.skip("platform has no SIGTERM")
+
+    prev_handler = signal.getsignal(sig)
+    prev_installed = tool._CLEANUP_INSTALLED
+    prev_signals = getattr(tool, "_SIGNAL_HANDLERS_INSTALLED", False)
+    prev_map = dict(tool._PREVIOUS_SIGNAL_HANDLERS)
+    try:
+        signal.signal(sig, signal.SIG_DFL)
+        tool._CLEANUP_INSTALLED = False
+        if hasattr(tool, "_SIGNAL_HANDLERS_INSTALLED"):
+            tool._SIGNAL_HANDLERS_INSTALLED = False
+        monkeypatch.setattr(tool.atexit, "register", lambda fn: None)
+
+        # 模拟第一次在非主线程调用（signal.signal 会抛 ValueError）
+        worker = threading.Thread(target=tool.install_cleanup)
+        worker.start()
+        worker.join()
+
+        class FakeDebugger:
+            def __init__(self, **kwargs):
+                pass
+
+            def launch(self, url, wait_page=5.0):
+                return {"port": 6123, "user_js": "/tmp/user.js",
+                        "executable": "camoufox", "headless": True}
+
+            def close(self):
+                return {}
+
+        monkeypatch.setattr(tool, "FireFoxDebugger", FakeDebugger)
+        await rdp_debugger(action="launch", port=0, wait_page=0)
+        assert signal.getsignal(sig) is tool._signal_cleanup, (
+            "主线程调用 rdp_debugger(launch) 后 SIGTERM 仍未注册到 _signal_cleanup"
+        )
+    finally:
+        tool._STATE["dbg"] = None
+        signal.signal(sig, prev_handler)
+        tool._CLEANUP_INSTALLED = prev_installed
+        if hasattr(tool, "_SIGNAL_HANDLERS_INSTALLED"):
+            tool._SIGNAL_HANDLERS_INSTALLED = prev_signals
+        tool._PREVIOUS_SIGNAL_HANDLERS.clear()
+        tool._PREVIOUS_SIGNAL_HANDLERS.update(prev_map)
+
+
+def test_unix_socket_path_stays_within_af_unix_limit(tmp_path, monkeypatch):
+    """TMPDIR 过长时（macOS 常见），Unix socket 路径仍须控制在 AF_UNIX 长度上限内。"""
+    long_tmp = tmp_path / ("very_long_tmpdir_segment_" * 4)
+    long_tmp.mkdir(parents=True)
+    monkeypatch.setenv("TMPDIR", str(long_tmp))
+    monkeypatch.setattr(tempfile, "tempdir", str(long_tmp))
+    sock_path = Path(make_unix_socket_path())
+    try:
+        assert len(str(sock_path).encode("utf-8")) <= 100, str(sock_path)
+        if os.name != "nt":
+            assert (sock_path.parent.stat().st_mode & 0o077) == 0
+    finally:
+        for child in sock_path.parent.iterdir():
+            child.unlink(missing_ok=True)
+        sock_path.parent.rmdir()
+
+
+def test_long_string_surrogate_split_fetches_only_missing_unit():
+    """分片切开代理对时只重取边界那一对代理（2 个码元），不重拉整段 200k 分片。"""
+    text = "x" * 9 + "😀" + "y" * 5  # index 9..10 是高代理，10..11 是低代理
+    units = len(text.encode("utf-16-le")) // 2
+    fake = _Utf16Rdp(text, {"source": {"type": "longString", "actor": "ls_opt", "length": units}})
+    dbg = FireFoxDebugger(port=1)
+    dbg.rdp = fake
+    out, info = dbg._read_long_string("ls_opt", units, 1000, 20, step=10)
+    assert out == text
+    out.encode("utf-8")
+    assert info["truncated"] is False
+    ranges = [(c["start"], c["end"]) for c in fake.calls if c["type"] == "substring"]
+    assert ranges == [(0, 10), (9, 11), (11, 16)], ranges
+
+
+def test_close_interrupts_inflight_wait_paused_immediately():
+    """线程阻塞在 wait_paused 时调 close()，必须立即通过 request_cancel 释放锁而非卡满 15s。"""
+    client_sock, server_sock = socket.socketpair()
+    try:
+        client = RdpClient(sock=client_sock, timeout=2.0)
+        dbg = FireFoxDebugger(port=1)
+        dbg.rdp = client
+        dbg.thread = "thread1"
+
+        entered = threading.Event()
+
+        def worker():
+            entered.set()
+            dbg.wait_paused(timeout=20.0)
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        assert entered.wait(2.0)
+        time.sleep(0.1)
+
+        t0 = time.monotonic()
+        dbg.close()
+        elapsed = time.monotonic() - t0
+        t.join(timeout=2.0)
+        assert elapsed < 1.5, f"close() blocked for {elapsed:.2f}s while wait_paused held _lock"
+        assert not t.is_alive()
+    finally:
+        client_sock.close()
+        server_sock.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_launch_does_not_leak_session_into_state(monkeypatch):
+    """launch 执行中途客户端取消协程时，必须通知 pending_dbg 退出且不能倒灌进 _STATE['dbg']。"""
+    started = threading.Event()
+    closed_calls: list[bool] = []
+
+    class SlowFakeDebugger:
+        def __init__(self, **kwargs):
+            self._cancel = threading.Event()
+
+        def request_cancel(self, reason=""):
+            self._cancel.set()
+
+        def launch(self, url, wait_page=5.0):
+            started.set()
+            if self._cancel.wait(2.0):
+                raise RdpError("RDP 启动已取消")
+            return {"port": 6543, "user_js": "/tmp/user.js",
+                    "executable": "camoufox", "headless": True}
+
+        def close(self):
+            closed_calls.append(True)
+            return {}
+
+    prev_dbg = tool._STATE.get("dbg")
+    prev_pending = tool._STATE.get("pending_dbg")
+    monkeypatch.setattr(tool, "FireFoxDebugger", SlowFakeDebugger)
+    try:
+        tool._STATE["dbg"] = None
+        tool._STATE["pending_dbg"] = None
+        task = asyncio.create_task(rdp_debugger(action="launch", port=0, wait_page=1.0))
+        while not started.is_set():
+            await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0.1)
+        assert tool._STATE["dbg"] is None, "取消后的 launch 仍把孤儿会话写进了 _STATE['dbg']"
+        assert tool._STATE.get("pending_dbg") is None
+        assert closed_calls, "取消后的 launch 没有调用 d.close()"
+    finally:
+        tool._STATE["dbg"] = prev_dbg
+        tool._STATE["pending_dbg"] = prev_pending
+
+
+def test_without_camoufox_download_is_thread_safe_under_overlap(monkeypatch):
+    """多线程重叠进出 _without_camoufox_download 时，先退出的线程不能剥掉仍在运行线程的防下载保护。"""
+    import camoufox.pkgman as pkgman
+    import camoufox_reverse_mcp.debugger_rdp_tools as rdp_mod
+
+    downloads: list[bool] = []
+
+    def fake_camoufox_path(download_if_missing: bool = True, *args, **kwargs):
+        downloads.append(bool(download_if_missing))
+        return Path("/nonexistent/camoufox")
+
+    fake_camoufox_path.__module__ = "camoufox.pkgman"
+    monkeypatch.setattr(pkgman, "camoufox_path", fake_camoufox_path)
+
+    b_entered = threading.Event()
+    a_exited = threading.Event()
+
+    def thread_a():
+        with rdp_mod._without_camoufox_download():
+            assert b_entered.wait(2.0)
+        a_exited.set()
+
+    def thread_b():
+        with rdp_mod._without_camoufox_download():
+            b_entered.set()
+            assert a_exited.wait(2.0)
+            pkgman.camoufox_path(True)
+
+    ta = threading.Thread(target=thread_a)
+    tb = threading.Thread(target=thread_b)
+    ta.start()
+    tb.start()
+    ta.join(timeout=3.0)
+    tb.join(timeout=3.0)
+    assert downloads == [False], f"线程 A 提前恢复了原函数，导致线程 B 触发下载: {downloads}"
+    assert pkgman.camoufox_path is fake_camoufox_path
+
+
+def test_symlinked_camoufox_bundle_and_windows_unix_socket_guard(tmp_path, monkeypatch):
+    """软链接指向 Camoufox.app 时仍须识别 properties.json；Windows 下 unix_socket 应快速报错。"""
+    import camoufox_reverse_mcp.debugger_rdp_tools as rdp_mod
+
+    app_macos = tmp_path / "Camoufox.app" / "Contents" / "MacOS"
+    app_res = tmp_path / "Camoufox.app" / "Contents" / "Resources"
+    app_macos.mkdir(parents=True)
+    app_res.mkdir(parents=True)
+    exe = app_macos / "camoufox"
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    (app_res / "properties.json").write_text("[]", encoding="utf-8")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    link = bin_dir / "camoufox-link"
+    try:
+        link.symlink_to(exe)
+    except OSError:
+        pytest.skip("symlinks unavailable on this filesystem")
+    assert rdp_mod._has_camoufox_bundle(link) is True
+
+    monkeypatch.setattr(rdp_mod.os, "name", "nt")
+    with pytest.raises(RdpError, match="macOS/Linux"):
+        make_unix_socket_path()
+
+
+@pytest.mark.asyncio
+async def test_source_with_embedded_lone_surrogate_saves_valid_utf8(tmp_path):
+    """混淆/JSVMP 源码中间含孤立代理项时，source(save_path=...) 不能抛 UnicodeEncodeError。"""
+    dbg = FireFoxDebugger(port=1)
+
+    class SurrogateRdp:
+        def call(self, obj, timeout=20.0, aliases=()):
+            t = obj.get("type")
+            if t == "sources":
+                return {"sources": [{"actor": "s_lone", "url": "https://ex.test/vmp.js"}]}
+            if t == "source":
+                return {"source": "var a = '\ud800'; var b = '\udfff';", "contentType": "text/javascript"}
+            return {}
+
+        def drain(self, *a, **kw):
+            return 0
+
+    dbg.rdp = SurrogateRdp()
+    dbg.thread = "thread1"
+    prev_dbg = tool._STATE.get("dbg")
+    out_file = tmp_path / "vmp.js"
+    try:
+        tool._STATE["dbg"] = dbg
+        res = await rdp_debugger(action="source", source="s_lone", save_path=str(out_file))
+        assert res["saved"] == str(out_file)
+        assert res["lone_surrogates_replaced"] == 2
+        saved = out_file.read_text(encoding="utf-8")
+        assert "\ufffd" in saved
+        json.dumps(res).encode("utf-8")
+    finally:
+        tool._STATE["dbg"] = prev_dbg
 
 
 # ---------------------------------------------------------------- 浏览器冒烟

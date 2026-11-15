@@ -193,7 +193,7 @@ uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-revers
 
 - [@tuntun1337](https://github.com/tuntun1337) — 严格 JSON Schema 兼容性
 - [@Code-xy](https://github.com/Code-xy) — Windows 引擎追踪问题定位与验证
-- [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP 执行点关联需求与分析材料，`instrumentation` 的 `tap_stage_calls` 阶段插桩，`stage_break` 与 `trace_session`，以及 v1.10.0 处理的 #19–#25 问题报告
+- [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP 执行点关联需求与分析材料，`instrumentation` 的 `tap_stage_calls` 阶段插桩，`stage_break` 与 `trace_session`，`rdp_debugger` Firefox RDP 断点调试，以及 v1.10.0 处理的 #19–#25 问题报告
 - [@dsaw1111](https://github.com/dsaw1111) — Camoufox 152 版本差距与 PropertyTracer 升级需求
 - [@chung1912](https://github.com/chung1912) — `uvx` 安装建议与 `uv tool install` 配置
 - [@tunguyen1993](https://github.com/tunguyen1993) — `hook_jsvmp_interpreter` 的 `script_url` 转义问题与修复建议

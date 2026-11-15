@@ -2,7 +2,7 @@
 
 [中文](TOOLS.md) | [English](TOOLS_en.md)
 
-共 39 个工具，按用途分 9 类。安装方式和启动参数见 [README](../README.md)。
+共 42 个工具，按用途分 10 类。安装方式和启动参数见 [README](../README.md)。
 
 - [可用工具一览](#可用工具一览)
 - [使用场景示例](#使用场景示例)
@@ -146,15 +146,16 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
 > RDP（`-start-debugger-server`），把等价能力补齐，全程不经过 Playwright，
 > 也不需要浏览器扩展。
 >
-> **适用**：Firefox 140+ 的 devtools 协议。开发机上是 camoufox 152 / reverse.5，
-> 冒烟测试与 `--self-test` 都在这套构建上实跑通过；官方 Firefox 未在本机验证过
-> （端口能否打开只取决于下面这两个 pref，与具体构建无关）。
+> **适用**：Firefox 140+ 的 devtools 协议。已在 Windows（camoufox 152 / reverse.5）与
+> macOS（官方 Camoufox 158 `Camoufox.app`、非 Camoufox 的原版 Firefox Nightly，以及
+> `unix_socket=true` 模式）实测通过 `--self-test` 与真实浏览器冒烟。
 
 > **启动方式（和服务端的 launch_browser 保持一致）**：`launch` 不自己拼命令行，
 > 而是复用 `camoufox.pkgman.launch_path()` 解析**当前激活**版本的可执行文件
-> （macOS 自动落到 `Camoufox.app/Contents/MacOS/camoufox`，不会退化成按 mtime 取
-> 最新），并继承 `BrowserManager.default_config`：`CAMOU_CONFIG` 指纹、代理、
-> `--headless`、`--os`、`--locale`。临时代理 profile 里会写 `user.js`，至少包含
+> （禁止自动下载浏览器；macOS 自动落到 `Camoufox.app/Contents/MacOS/camoufox`，不会
+> 退化成按 mtime 取最新），并继承 `BrowserManager.default_config`：`CAMOU_CONFIG`
+> 指纹、代理、`--headless`、`--os`、`--locale`、`browser_version`。临时代理 profile
+> 里会写 `user.js`，至少包含
 > `devtools.debugger.remote-enabled=true`、`devtools.chrome.enabled=true`、
 > `devtools.debugger.prompt-connection=false` —— `DevToolsStartup` 要求前两个都为
 > true 才开调试端口（官方构建里 `devtools.chrome.enabled` 默认 false，空 profile 下
@@ -162,9 +163,10 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
 >
 > **不继承的部分**（明说，不静默降级）：代理认证（`username`/`password` 需要交互
 > 弹窗，带认证的代理上请求会失败，不会直连泄漏真实 IP）、`headless="virtual"`
-> （没有 Xvfb 包装，按普通 headless 处理）、`browser_version` 与 `ws_endpoint`
-> 这类 Playwright attach 模式。`camoufox` 不可用时退化成裸 profile 启动并在返回值的
-> `warnings` 里说明指纹/代理没有继承。
+> （没有 Xvfb 包装，按普通 headless 处理）、`ws_endpoint` 这类 Playwright attach
+> 模式。传入非 Camoufox 的原版 Firefox（无 `properties.json`）或 `camoufox` 不可用时，
+> 退化成裸 profile 启动（代理与 RDP pref 仍写入 `user.js`），并在返回值的 `warnings`
+> 里说明指纹/语言没有继承。
 
 > **安全**：调试端口没有认证，而且它能打开的前提是 `devtools.chrome.enabled=true`
 > —— 也就是说**能连上端口的人可以调试浏览器主进程，可以用当前系统用户的身份执行
@@ -347,7 +349,7 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
 │              camoufox-reverse-mcp                │
 │  ┌──────────┬──────────┬──────────┬──────────┐  │
 │  │Navigation│ Script   │Debugging │ Hooking  │  │
-│  │          │ Analysis │          │          │  │
+│  │          │ Analysis │ / RDP    │          │  │
 │  ├──────────┼──────────┼──────────┼──────────┤  │
 │  │ Network  │ JSVMP    │  Cookie  │  Verify  │  │
 │  │ Capture  │ Analysis │ Storage  │  Signer  │  │
@@ -355,9 +357,9 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
 │  │ ★ PropertyTracer (trace_property_access)  │  │
 │  │   Gecko 原生固定点追踪（不改写页面 JS）       │  │
 │  └───────────────────────────────────────────┘  │
-│                    ↕ Playwright API               │
+│       ↕ Playwright API      ↕ Firefox Native RDP │
 ├─────────────────────────────────────────────────┤
-│      Camoufox (反指纹 Firefox, Juggler 协议)      │
+│      Camoufox (反指纹 Firefox, Juggler / RDP)    │
 │  C++ 引擎级指纹伪造 · BrowserForge 真实指纹分布     │
 └─────────────────────────────────────────────────┘
 ```

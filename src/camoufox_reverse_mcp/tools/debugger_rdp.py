@@ -10,7 +10,7 @@ Playwright 的 Firefox 走 Juggler，没有 CDP，所以 Playwright 侧拿不到
 取消请求时会给工作线程发取消信号，读 socket 的循环随即退出。
 
 启动的浏览器继承服务端配置（与 `launch_browser` 同一份 `BrowserManager.default_config`：
-`CAMOU_CONFIG` 指纹、代理、`--headless`、`--os`、`--locale`），只额外加调试端口和
+`CAMOU_CONFIG` 指纹、代理、`--headless`、`--os`、`--locale`、`browser_version`），只额外加调试端口和
 RDP 需要的 pref。
 
 安全：RDP 端口没有认证。要开端口必须先打开 `devtools.chrome.enabled`，也就是
@@ -31,13 +31,17 @@ from ..server import mcp
 from ..debugger_rdp_tools import (
     FireFoxDebugger,
     RdpError,
+    _expand,
+    _sanitize_surrogates,
     make_unix_socket_path,
 )
 
-#: 当前会话。`dbg` 只由本模块改，`last_paused` 记录最近一次暂停。
-_STATE: dict = {"dbg": None, "last_paused": None}
+#: 当前会话。`dbg` 只由本模块改，`pending_dbg` 跟踪正在启动/连接中的会话，`last_paused` 记录最近一次暂停。
+_STATE: dict = {"dbg": None, "pending_dbg": None, "last_paused": None}
 _STATE_LOCK = threading.RLock()
 _CLEANUP_INSTALLED = False
+_SIGNAL_HANDLERS_INSTALLED = False
+_SIGNAL_CLEANUP_ACTIVE = False
 _PREVIOUS_SIGNAL_HANDLERS: dict = {}
 
 ACTIONS = (
@@ -61,44 +65,67 @@ def cleanup_session(reason: str = "") -> None:
     """关闭并丢掉当前会话（MCP 退出、收到信号、重复 launch 时都走这里）。"""
     with _STATE_LOCK:
         dbg = _STATE.get("dbg")
+        pending = _STATE.get("pending_dbg")
         _STATE["dbg"] = None
+        _STATE["pending_dbg"] = None
         _STATE["last_paused"] = None
-    if dbg is not None:
-        try:
-            dbg.close()
-        except Exception:
-            pass
+    for target in (pending, dbg):
+        if target is not None:
+            try:
+                target.close()
+            except Exception:
+                pass
 
 
 def _signal_cleanup(signum, frame):  # pragma: no cover - 进程级收尾
-    cleanup_session("signal %s" % signum)
-    previous = _PREVIOUS_SIGNAL_HANDLERS.get(signum)
-    if callable(previous):
-        return previous(signum, frame)
+    global _SIGNAL_CLEANUP_ACTIVE
+    with _STATE_LOCK:
+        if _SIGNAL_CLEANUP_ACTIVE:
+            return None
+        _SIGNAL_CLEANUP_ACTIVE = True
     try:
-        signal.signal(signum, signal.SIG_DFL)
-        os.kill(os.getpid(), signum)
-    except Exception:
-        pass
+        cleanup_session("signal %s" % signum)
+        previous = _PREVIOUS_SIGNAL_HANDLERS.get(signum)
+        if callable(previous):
+            return previous(signum, frame)
+        try:
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+        except Exception:
+            pass
+    finally:
+        with _STATE_LOCK:
+            _SIGNAL_CLEANUP_ACTIVE = False
 
 
 def install_cleanup() -> None:
     """atexit + 信号处理：MCP 进程退出时把调试浏览器一起收掉（review #10）。"""
-    global _CLEANUP_INSTALLED
+    global _CLEANUP_INSTALLED, _SIGNAL_HANDLERS_INSTALLED
     with _STATE_LOCK:
-        if _CLEANUP_INSTALLED:
-            return
-        _CLEANUP_INSTALLED = True
-    atexit.register(cleanup_session)
-    for name in ("SIGINT", "SIGTERM", "SIGHUP"):
-        sig = getattr(signal, name, None)
-        if sig is None:
-            continue
-        try:
-            _PREVIOUS_SIGNAL_HANDLERS[sig] = signal.getsignal(sig)
-            signal.signal(sig, _signal_cleanup)
-        except (ValueError, OSError, RuntimeError):  # 非主线程 / Windows 上的 SIGHUP
-            continue
+        need_atexit = not _CLEANUP_INSTALLED
+        if need_atexit:
+            _CLEANUP_INSTALLED = True
+        on_main = threading.current_thread() is threading.main_thread()
+        need_signals = on_main and not _SIGNAL_HANDLERS_INSTALLED
+        if need_signals:
+            _SIGNAL_HANDLERS_INSTALLED = True
+    if need_atexit:
+        atexit.register(cleanup_session)
+    if need_signals:
+        installed_any = False
+        for name in ("SIGINT", "SIGTERM", "SIGHUP"):
+            sig = getattr(signal, name, None)
+            if sig is None:
+                continue
+            try:
+                _PREVIOUS_SIGNAL_HANDLERS[sig] = signal.getsignal(sig)
+                signal.signal(sig, _signal_cleanup)
+                installed_any = True
+            except (ValueError, OSError, RuntimeError):  # 非主线程 / Windows 上的 SIGHUP
+                continue
+        if not installed_any:
+            with _STATE_LOCK:
+                _SIGNAL_HANDLERS_INSTALLED = False
 
 
 def _reset_last_paused() -> None:
@@ -143,6 +170,7 @@ def _paused_payload(event: dict) -> dict:
 
 def _sync_dispatch(action: str, kw: dict) -> dict:
     """阻塞实现（在 asyncio.to_thread 里跑）。"""
+    cancel_token: threading.Event | None = kw.get("_cancel_token")
     dbg = _STATE.get("dbg")
 
     if action == "launch":
@@ -156,20 +184,45 @@ def _sync_dispatch(action: str, kw: dict) -> dict:
                 previous.close()
             except Exception:
                 pass
+        if cancel_token is not None and cancel_token.is_set():
+            raise RdpError("RDP 启动已取消")
         unix_path = None
-        if kw["unix_socket"]:
-            unix_path = make_unix_socket_path()
-        d = FireFoxDebugger(port=kw["port"], exe=kw["executable"] or None,
-                            unix_path=unix_path)
+        d: FireFoxDebugger | None = None
         try:
+            if kw["unix_socket"]:
+                unix_path = make_unix_socket_path()
+            d = FireFoxDebugger(port=kw["port"], exe=kw["executable"] or None,
+                                unix_path=unix_path)
+            with _STATE_LOCK:
+                _STATE["pending_dbg"] = d
+                if cancel_token is not None and cancel_token.is_set():
+                    d.request_cancel("client cancelled the request")
             info = d.launch(kw["url"], wait_page=kw["wait_page"])
         except Exception:
-            # 启动到一半失败时也要把自己拉起的浏览器清掉，否则端口会被占住
-            d.close()
+            with _STATE_LOCK:
+                if _STATE.get("pending_dbg") is d:
+                    _STATE["pending_dbg"] = None
+            # 启动到一半失败时也要把自己拉起的浏览器和临时 socket 目录清掉
+            if d is not None:
+                d.close()
+            elif unix_path:
+                parent = os.path.dirname(unix_path)
+                if parent and os.path.basename(parent).startswith("rdp_sock_"):
+                    import shutil
+                    shutil.rmtree(parent, ignore_errors=True)
             raise
+        cancelled = False
         with _STATE_LOCK:
-            _STATE["dbg"] = d
-            _STATE["last_paused"] = None
+            if _STATE.get("pending_dbg") is d:
+                _STATE["pending_dbg"] = None
+            if cancel_token is not None and cancel_token.is_set():
+                cancelled = True
+            else:
+                _STATE["dbg"] = d
+                _STATE["last_paused"] = None
+        if cancelled:
+            d.close()
+            raise RdpError("RDP 启动已取消")
         out = {"status": "launched"}
         out.update({k: v for k, v in info.items() if k != "warnings"})
         if info.get("warnings"):
@@ -186,6 +239,8 @@ def _sync_dispatch(action: str, kw: dict) -> dict:
                 previous.close()
             except Exception:
                 pass
+        if cancel_token is not None and cancel_token.is_set():
+            raise RdpError("RDP 连接已取消")
         unix_path = kw["socket_path"] or None
         if not unix_path and kw["unix_socket"]:
             raise RdpError(
@@ -193,12 +248,28 @@ def _sync_dispatch(action: str, kw: dict) -> dict:
                 "要用 launch 返回的 unix_socket 路径。")
         d = FireFoxDebugger(port=kw["port"])
         try:
+            with _STATE_LOCK:
+                _STATE["pending_dbg"] = d
+                if cancel_token is not None and cancel_token.is_set():
+                    d.request_cancel("client cancelled the request")
             info = d.attach(kw["port"] or None, unix_path=unix_path)
         except Exception:
+            with _STATE_LOCK:
+                if _STATE.get("pending_dbg") is d:
+                    _STATE["pending_dbg"] = None
             d.close()
             raise
+        cancelled = False
         with _STATE_LOCK:
-            _STATE["dbg"] = d
+            if _STATE.get("pending_dbg") is d:
+                _STATE["pending_dbg"] = None
+            if cancel_token is not None and cancel_token.is_set():
+                cancelled = True
+            else:
+                _STATE["dbg"] = d
+        if cancelled:
+            d.close()
+            raise RdpError("RDP 连接已取消")
         return {"status": "connected", **info}
 
     if action == "status":
@@ -240,17 +311,21 @@ def _sync_dispatch(action: str, kw: dict) -> dict:
                                       kw["url_substr"] or None)
         src = matches[0]
         got = dbg.source_text(src["actor"], max_chars=kw["max_chars"])
-        text = got.get("text") or ""
+        text, extra_replaced = _sanitize_surrogates(got.get("text") or "")
+        replaced = int(got.get("lone_surrogates_replaced") or 0) + extra_replaced
         out = {"actor": src["actor"], "url": src.get("url"),
                "length": got.get("length", len(text)),
                "lines": text.count("\n") + 1,
                "truncated": bool(got.get("truncated")),
                "returned_chars": len(text),
                "source_start_line": src.get("sourceStartLine")}
+        if replaced:
+            out["lone_surrogates_replaced"] = replaced
         if kw["save_path"]:
-            with open(kw["save_path"], "w", encoding="utf-8", newline="") as handle:
+            target_path = str(_expand(kw["save_path"]))
+            with open(target_path, "w", encoding="utf-8", newline="") as handle:
                 handle.write(text)
-            out["saved"] = kw["save_path"]
+            out["saved"] = target_path
         else:
             out["head"] = text[:400]
         if got.get("truncated"):
@@ -347,6 +422,8 @@ def _sync_dispatch(action: str, kw: dict) -> dict:
                 return out
             return err
         result = reply.get("result")
+        if isinstance(result, str):
+            result, _ = _sanitize_surrogates(result)
         materialized, long_info = dbg.materialize(result, max_chars=kw["max_chars"])
         out = {"hasException": reply.get("hasException"),
                "result": result, "input": reply.get("input")}
@@ -354,9 +431,13 @@ def _sync_dispatch(action: str, kw: dict) -> dict:
             out["frame"] = kw["frame_actor"]
         if long_info is not None:
             # review #14：长字符串结果是 longString grip，这里顺带把全文取回来
+            if isinstance(materialized, str):
+                materialized, _ = _sanitize_surrogates(materialized)
             out["result_text"] = materialized
             out["longString"] = {k: long_info.get(k) for k in
                                  ("length", "truncated", "long_string_actor")}
+            if long_info.get("lone_surrogates_replaced"):
+                out["longString"]["lone_surrogates_replaced"] = long_info["lone_surrogates_replaced"]
         if reply.get("exception"):
             out["exception"] = reply.get("exception")
         if reply.get("exceptionMessage"):
@@ -402,18 +483,22 @@ def _sync_dispatch(action: str, kw: dict) -> dict:
     raise RdpError("unknown action %r; expected one of %s" % (action, ", ".join(ACTIONS)))
 
 
-async def _run_blocking(fn, *args):
+async def _run_blocking(fn, *args, cancel_token: threading.Event | None = None):
     """把阻塞调用放进线程；外层被取消时给工作线程发取消信号（review #3）。"""
     task = asyncio.ensure_future(asyncio.to_thread(fn, *args))
     try:
         return await task
     except asyncio.CancelledError:
-        dbg = _STATE.get("dbg")
-        if dbg is not None:
-            try:
-                dbg.request_cancel("client cancelled the request")
-            except Exception:
-                pass
+        if cancel_token is not None:
+            cancel_token.set()
+        with _STATE_LOCK:
+            targets = (_STATE.get("dbg"), _STATE.get("pending_dbg"))
+        for target in targets:
+            if target is not None:
+                try:
+                    target.request_cancel("client cancelled the request")
+                except Exception:
+                    pass
         raise
 
 
@@ -451,7 +536,7 @@ async def rdp_debugger(
 
     camoufox 是 Firefox，Playwright 走 Juggler 没有 CDP；这个工具直接开 RDP
     （`-start-debugger-server`）把调试能力补齐。启动的浏览器继承服务端配置
-    （指纹 / 代理 / headless / os / locale），只额外加调试端口与 RDP pref。
+    （指纹 / 代理 / headless / os / locale / browser_version），只额外加调试端口与 RDP pref。
 
     安全：端口没有认证，开端口必须先打开 `devtools.chrome.enabled`，也就是连上端口
     就能用当前系统用户身份在浏览器主进程执行任意代码；同机其他用户也能连
@@ -511,6 +596,8 @@ async def rdp_debugger(
     act = (action or "").strip().lower()
     if act not in ACTIONS:
         raise RdpError("unknown action %r; expected one of %s" % (action, ", ".join(ACTIONS)))
+    if act in ("launch", "attach"):
+        install_cleanup()
     kw = dict(port=port, url=url, executable=executable, wait_page=wait_page,
               url_substr=url_substr, target_type=target_type, line=line, column=column,
               condition=condition, frame_actor=frame_actor, expression=expression,
@@ -519,4 +606,6 @@ async def rdp_debugger(
               max_chars=max_chars, max_items=max_items, source=source,
               source_url=source_url, remove_all=remove_all, remove=remove,
               unix_socket=unix_socket, socket_path=socket_path)
-    return await _run_blocking(_sync_dispatch, act, kw)
+    cancel_token = threading.Event()
+    kw["_cancel_token"] = cancel_token
+    return await _run_blocking(_sync_dispatch, act, kw, cancel_token=cancel_token)

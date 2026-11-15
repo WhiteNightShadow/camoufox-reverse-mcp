@@ -50,6 +50,7 @@ Firefox 152 实测协议（camoufox 152 与官方 Firefox 用同一套 devtools 
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -114,8 +115,24 @@ def _error_of(reply) -> dict | None:
     return {"error": str(code), "message": str(reply.get("message") or "")}
 
 
+_SURROGATE_PAIR_RE = re.compile(r"([\ud800-\udbff])([\udc00-\udfff])")
+_LONE_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
+
+
 def _is_high_surrogate(ch: str) -> bool:
     return len(ch) == 1 and 0xD800 <= ord(ch) <= 0xDBFF
+
+
+def _sanitize_surrogates(text: str) -> tuple[str, int]:
+    """合并相邻代理对并将孤立代理项替换为 U+FFFD，避免 UTF-8 落盘或 stdio JSON 编码崩溃。"""
+    if not text:
+        return text, 0
+    paired = _SURROGATE_PAIR_RE.sub(
+        lambda m: chr(0x10000 + ((ord(m.group(1)) - 0xD800) << 10) + (ord(m.group(2)) - 0xDC00)),
+        text,
+    )
+    cleaned, count = _LONE_SURROGATE_RE.subn("\ufffd", paired)
+    return cleaned, count
 
 
 def _free_port(host: str = "127.0.0.1") -> int:
@@ -179,14 +196,75 @@ def _runtime_launch_paths(runtime: dict) -> list[str]:
     return [str(item["path"]) for item in installed]
 
 
+_CAMOUFOX_PATCH_LOCK = threading.RLock()
+_CAMOUFOX_PATCH_DEPTH = 0
+_CAMOUFOX_PATCH_SAVED: list[tuple[object, str, object]] = []
+
+
+@contextlib.contextmanager
+def _without_camoufox_download():
+    """禁止 camoufox 在路径探测或 launch_options 中静默触发自动下载（MCP 不下载浏览器）。"""
+    global _CAMOUFOX_PATCH_DEPTH
+    with _CAMOUFOX_PATCH_LOCK:
+        if _CAMOUFOX_PATCH_DEPTH == 0:
+            try:
+                from camoufox import pkgman
+
+                orig_path = getattr(pkgman, "camoufox_path", None)
+                if callable(orig_path) and getattr(orig_path, "__module__", "") == "camoufox.pkgman":
+                    def _no_download(download_if_missing: bool = False, *args, **kwargs):
+                        return orig_path(False, *args, **kwargs)
+
+                    _CAMOUFOX_PATCH_SAVED.append((pkgman, "camoufox_path", orig_path))
+                    setattr(pkgman, "camoufox_path", _no_download)
+                    try:
+                        import camoufox.utils as cfx_utils
+
+                        if getattr(cfx_utils, "camoufox_path", None) is orig_path:
+                            _CAMOUFOX_PATCH_SAVED.append((cfx_utils, "camoufox_path", orig_path))
+                            setattr(cfx_utils, "camoufox_path", _no_download)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        _CAMOUFOX_PATCH_DEPTH += 1
+    try:
+        yield
+    finally:
+        with _CAMOUFOX_PATCH_LOCK:
+            _CAMOUFOX_PATCH_DEPTH -= 1
+            if _CAMOUFOX_PATCH_DEPTH <= 0:
+                _CAMOUFOX_PATCH_DEPTH = 0
+                for mod, attr, orig in reversed(_CAMOUFOX_PATCH_SAVED):
+                    setattr(mod, attr, orig)
+                _CAMOUFOX_PATCH_SAVED.clear()
+
+
+def _has_camoufox_bundle(executable: str | Path) -> bool:
+    """判断可执行文件旁（macOS 为 Contents/Resources）是否带 Camoufox 的 properties.json。"""
+    raw = Path(executable)
+    try:
+        resolved = raw.resolve()
+    except OSError:
+        resolved = raw
+    for candidate in (resolved, raw):
+        directory = candidate.parent
+        if directory.name == "MacOS":
+            directory = directory.parent / "Resources"
+        if (directory / "properties.json").is_file():
+            return True
+    return False
+
+
 def _launch_path_for(root: str | Path) -> str | None:
     """用 camoufox 自己的 `launch_path()` 解析某个安装目录（含 macOS app 包布局）。"""
-    try:
-        from camoufox import pkgman
+    with _without_camoufox_download():
+        try:
+            from camoufox import pkgman
 
-        path = pkgman.launch_path(Path(root))
-    except Exception:
-        return None
+            path = pkgman.launch_path(Path(root))
+        except Exception:
+            return None
     return str(path) if path and Path(path).is_file() else None
 
 
@@ -196,8 +274,8 @@ def detect_browser_executable(explicit: str | None = None) -> str:
     优先级（和 `launch_browser` 用同一个浏览器，review #1）：
       1. 显式传入的路径；
       2. `CAMOUFOX_EXE`（支持 `~/...` 展开，review #14）；
-      3. `camoufox.pkgman.launch_path()` —— 当前**激活**版本，macOS 自动落到
-         `Camoufox.app/Contents/MacOS/camoufox`；
+      3. `camoufox.pkgman.launch_path()` —— 当前**激活**版本（禁止自动下载），
+         macOS 自动落到 `Camoufox.app/Contents/MacOS/camoufox`；
       4. `inspect_camoufox_runtime()` 里其它已安装版本（激活的优先，不按 mtime）；
       5. 已知缓存目录里的启动器（兜底 0.4 扁平布局 / 非标准安装）；
       6. 系统 Firefox（RDP 是 Firefox 原生功能，任何带该参数的 Firefox 都能用）。
@@ -208,15 +286,16 @@ def detect_browser_executable(explicit: str | None = None) -> str:
             if path.is_file():
                 return str(path)
 
-    # 3. 激活版本（pkgman 自己处理 macOS 的 app 包路径）
-    try:
-        from camoufox import pkgman
+    # 3. 激活版本（pkgman 自己处理 macOS 的 app 包路径；包在 _without_camoufox_download 里避免拉取 2.4GB）
+    with _without_camoufox_download():
+        try:
+            from camoufox import pkgman
 
-        path = pkgman.launch_path()
-        if path and Path(path).is_file():
-            return str(path)
-    except Exception:
-        pass
+            path = pkgman.launch_path()
+            if path and Path(path).is_file():
+                return str(path)
+        except Exception:
+            pass
 
     # 4. 其它已安装版本，激活的排第一
     runtime: dict = {}
@@ -486,6 +565,9 @@ def build_launch_plan(
     只额外加调试端口和 RDP pref（review #2）。返回的结构里带 `warnings`，
     写明哪些配置继承不了（不静默降级）。
     """
+    if not port and not unix_path:
+        raise RdpError("build_launch_plan 需要 port 或 unix_path（否则调试端口不会打开）")
+
     cfg = resolve_launch_config(config)
     warnings: list[str] = []
     prefs: dict = {}
@@ -494,18 +576,57 @@ def build_launch_plan(
     headless_requested = cfg.get("headless", False)
     headless = bool(headless_requested)
     executable = ""
+    browser_selector: str | None = None
+
+    if exe:
+        executable = str(_expand(exe))
+        if not Path(executable).is_file():
+            raise RdpError("指定的可执行文件不存在: %s" % executable)
+    else:
+        env_exe = os.environ.get("CAMOUFOX_EXE")
+        if env_exe and _expand(env_exe).is_file():
+            executable = str(_expand(env_exe))
+        elif cfg.get("browser_version"):
+            try:
+                from .camoufox_runtime import launch_overrides
+
+                overrides, selected = launch_overrides(str(cfg["browser_version"]))
+                browser_selector = overrides.get("browser")
+                resolved = _launch_path_for(selected["path"]) if selected.get("path") else None
+                if resolved:
+                    executable = resolved
+            except Exception as exc:
+                raise RdpError("解析 browser_version=%r 失败: %s" % (cfg["browser_version"], exc))
+        if not executable:
+            executable = detect_browser_executable()
 
     kwargs = _launch_option_kwargs(cfg)
     options: dict = {}
-    try:
-        from camoufox.utils import launch_options
+    with _without_camoufox_download():
+        try:
+            from camoufox.utils import launch_options
 
-        options = launch_options(headless=headless, **kwargs) or {}
-    except Exception as exc:  # 官方 Firefox 或 camoufox 未安装时退化
-        warnings.append(
-            "camoufox launch_options 失败（%s），这次用裸 profile 启动：指纹/代理/语言"
-            "配置没有继承（review #2）。" % exc)
-        options = {}
+            is_real_camoufox = getattr(launch_options, "__module__", "") == "camoufox.utils"
+            if is_real_camoufox and not browser_selector and not _has_camoufox_bundle(executable):
+                warnings.append(
+                    "可执行文件 %s 不是 Camoufox 构建（缺少 properties.json），已跳过 "
+                    "camoufox launch_options，这次用裸 profile 启动：指纹/语言配置没有继承"
+                    "（代理与 RDP pref 仍已写入 user.js）。" % executable
+                )
+            elif is_real_camoufox:
+                call_kwargs = dict(kwargs)
+                if browser_selector:
+                    call_kwargs["browser"] = browser_selector
+                else:
+                    call_kwargs["executable_path"] = executable
+                options = launch_options(headless=headless, **call_kwargs) or {}
+            else:
+                options = launch_options(headless=headless, **kwargs) or {}
+        except Exception as exc:  # 官方 Firefox 或 camoufox 未安装时退化
+            warnings.append(
+                "camoufox launch_options 失败（%s），这次用裸 profile 启动：指纹/语言"
+                "配置没有继承（review #2）。" % exc)
+            options = {}
 
     if options:
         prefs.update(options.get("firefox_user_prefs") or {})
@@ -513,6 +634,10 @@ def build_launch_plan(
         extra_args.extend(str(a) for a in (options.get("args") or []))
         if not headless and options.get("headless"):
             headless = True
+        if not exe and not os.environ.get("CAMOUFOX_EXE"):
+            opt_exe = options.get("executable_path")
+            if opt_exe and Path(str(opt_exe)).is_file():
+                executable = str(opt_exe)
         if isinstance(headless_requested, str) and headless_requested.startswith("virtual"):
             warnings.append(
                 "headless=%r（虚拟显示）不会继承：本工具直接启动浏览器，没有 Xvfb "
@@ -525,19 +650,6 @@ def build_launch_plan(
     # RDP 的三个 pref 永远写进去（review #1）
     prefs.update(RDP_PREFS)
 
-    if exe:
-        executable = str(_expand(exe))
-        if not Path(executable).is_file():
-            raise RdpError("指定的可执行文件不存在: %s" % executable)
-    else:
-        env_exe = os.environ.get("CAMOUFOX_EXE")
-        if env_exe and _expand(env_exe).is_file():
-            executable = str(_expand(env_exe))
-        elif options.get("executable_path") and Path(str(options["executable_path"])).is_file():
-            executable = str(options["executable_path"])
-        else:
-            executable = detect_browser_executable()
-
     cmd: list[str] = [executable, "-no-remote"]
     if profile:
         cmd += ["-profile", str(profile)]
@@ -545,8 +657,6 @@ def build_launch_plan(
         cmd += ["-start-debugger-server", str(port)]
     elif unix_path:
         cmd += ["-start-debugger-server", str(unix_path)]
-    else:
-        raise RdpError("build_launch_plan 需要 port 或 unix_path（否则调试端口不会打开）")
     if headless:
         cmd.append("-headless")
     cmd += extra_args
@@ -690,10 +800,10 @@ class RdpClient:
         self._pending.clear()
         if self._closed:
             return
-        end = time.monotonic() + 0.5
+        end = time.monotonic() + 0.25
         while time.monotonic() < end:
             try:
-                msg = self._read_packet(0.1)
+                msg = self._read_packet(0.02)
             except TimeoutError:
                 break
             except (RdpError, OSError):
@@ -815,6 +925,8 @@ class RdpClient:
         由 `since` 推进来保证拿到的是"新的那一次"。
         """
         with self._lock:
+            if self._cancel.is_set():
+                self.resume_after_cancel()
             found = self._scan(predicate, since)
             if found is not None:
                 return found
@@ -883,6 +995,7 @@ class FireFoxDebugger:
                  unix_path: str | None = None, config: dict | None = None):
         self.port = int(port or 0)
         self.unix_path = unix_path
+        self._owns_unix_socket = bool(unix_path)
         self.exe = exe or None
         self.config = dict(config or {})
         self.proc: subprocess.Popen | None = None
@@ -929,10 +1042,13 @@ class FireFoxDebugger:
         （review #1 #2 #10）。
         """
         with self._lock:
+            if self._cancel.is_set():
+                raise RdpError("RDP 启动已取消")
             had_session = bool(self.rdp or self.profile or
                                (self.proc is not None and self.proc.poll() is None))
             if had_session:
                 self.close()
+                self._cancel.clear()
             if self.unix_path is None and self.port <= 0:
                 self.port = _free_port()
             if self.unix_path is None and not _wait_port_free(self.port, 5.0):
@@ -956,7 +1072,11 @@ class FireFoxDebugger:
             self.exe = plan["executable"]
             prefs_path = write_profile_prefs(profile, plan["prefs"])
             if self.unix_path:
+                self._owns_unix_socket = True
                 _prepare_unix_dir(self.unix_path)
+            if self._cancel.is_set():
+                self.close()
+                raise RdpError("RDP 启动已取消")
             try:
                 self.proc = subprocess.Popen(
                     plan["cmd"], env=plan["env"],
@@ -972,6 +1092,9 @@ class FireFoxDebugger:
             # camoufox.exe 在某些平台上只是启动器：它拉起浏览器进程后自己 exit(0)，
             # 所以"启动器退出"不等于失败，判据只能是端口能不能连上。
             while time.monotonic() < deadline:
+                if self._cancel.is_set():
+                    self.close()
+                    raise RdpError("RDP 启动已取消")
                 try:
                     self.rdp = RdpClient(
                         port=self.port,
@@ -988,7 +1111,9 @@ class FireFoxDebugger:
                         exited_at = time.monotonic()
                     elif time.monotonic() - exited_at > 10.0:
                         break
-                time.sleep(0.2)
+                if self._cancel.wait(0.2):
+                    self.close()
+                    raise RdpError("RDP 启动已取消")
             if not connected:
                 info = {
                     "executable": plan["executable"],
@@ -1022,38 +1147,56 @@ class FireFoxDebugger:
                 info["closed_previous_session"] = True
             self.launch_info = info
             if wait_page:
-                self._wait_first_page(wait_page)
+                try:
+                    self._wait_first_page(wait_page)
+                except Exception:
+                    self.close()
+                    raise
             return info
 
     def _wait_first_page(self, wait_page: float) -> None:
         """等第一个标签页离开 about:blank（比固定 sleep 更稳），再留一点加载时间。"""
         end = time.monotonic() + wait_page
         while time.monotonic() < end:
+            if self._cancel.is_set():
+                raise RdpError("RDP 启动已取消")
             try:
                 tabs = (self.rdp.call({"to": "root", "type": "listTabs"}, 10) or {}).get("tabs") or []
             except RdpError:
+                if self._cancel.is_set():
+                    raise RdpError("RDP 启动已取消")
                 break
             if any(str(t.get("url") or "") not in ("", "about:blank") for t in tabs):
                 break
-            time.sleep(0.1)
-        time.sleep(min(0.3, wait_page))
+            if self._cancel.wait(0.1):
+                raise RdpError("RDP 启动已取消")
+        if self._cancel.wait(min(0.3, wait_page)):
+            raise RdpError("RDP 启动已取消")
 
     def attach(self, port: int | None = None, unix_path: str | None = None,
                timeout: float = 20.0) -> dict:
         """连到已经在跑的调试端口。"""
         with self._lock:
+            if self._cancel.is_set():
+                raise RdpError("RDP 连接已取消")
             if self.rdp is not None:
                 self.close()
+                self._cancel.clear()
+            self._owns_unix_socket = False
             if unix_path:
                 self.unix_path = unix_path
                 self.rdp = RdpClient(unix_path=unix_path, timeout=timeout)
             else:
+                self.unix_path = None
                 self.port = int(port or self.port or 0)
                 if not self.port:
                     raise RdpError(
                         "action=\"attach\" 需要 port（或 unix_socket）：端口没有认证也"
                         "没有广播，必须知道正在监听的端口号。")
                 self.rdp = RdpClient(port=self.port, timeout=timeout)
+            if self._cancel.is_set():
+                self.close()
+                raise RdpError("RDP 连接已取消")
             hello = self.rdp.hello()
             return {"port": None if unix_path else self.port,
                     "unix_socket": unix_path,
@@ -1061,7 +1204,8 @@ class FireFoxDebugger:
                     "traits": hello.get("traits")}
 
     def close(self) -> dict:
-        """关闭会话与本次启动的浏览器（不碰别人的进程）。"""
+        """关闭会话与本次启动的浏览器（不碰别人的进程和别人的 Unix socket）。"""
+        self.request_cancel("closing")
         acquired = self._lock.acquire(timeout=15.0)
         try:
             rdp, self.rdp = self.rdp, None
@@ -1081,7 +1225,8 @@ class FireFoxDebugger:
             profile, self.profile = self.profile, None
             # terminate 只结束启动器；按 profile 把子进程一并清掉，避免端口被残留实例占用
             killed = _kill_by_profile(profile)
-            if self.unix_path:
+            owns_unix, self._owns_unix_socket = self._owns_unix_socket, False
+            if self.unix_path and owns_unix:
                 try:
                     os.unlink(self.unix_path)
                 except OSError:
@@ -1089,6 +1234,8 @@ class FireFoxDebugger:
                 parent = os.path.dirname(self.unix_path)
                 if parent and os.path.basename(parent).startswith("rdp_sock_"):
                     shutil.rmtree(parent, ignore_errors=True)
+            elif not owns_unix:
+                self.unix_path = None
             if profile:
                 time.sleep(0.2)
                 shutil.rmtree(profile, ignore_errors=True)
@@ -1127,6 +1274,7 @@ class FireFoxDebugger:
           （review #14），空 `url_substr` 优先沿用当前绑定的 tab。
         """
         with self._lock:
+            self._release_cancel()
             rdp = self._require_rdp()
             old_target, old_thread = self.target, self.thread
             tabs = (rdp.call({"to": "root", "type": "listTabs"}, 25) or {}).get("tabs") or []
@@ -1306,8 +1454,15 @@ class FireFoxDebugger:
             if isinstance(value, str):
                 truncated = len(value) > max_chars
                 text = value[:max_chars] if truncated else value
-                return {"text": _trim_dangling_surrogate(text)[0], "truncated": truncated,
-                        "length": len(value), "contentType": r.get("contentType")}
+                text, dropped = _trim_dangling_surrogate(text)
+                if dropped:
+                    truncated = True
+                text, replaced = _sanitize_surrogates(text)
+                out = {"text": text, "truncated": truncated,
+                       "length": len(value), "contentType": r.get("contentType")}
+                if replaced:
+                    out["lone_surrogates_replaced"] = replaced
+                return out
             if isinstance(value, dict) and value.get("type") == "longString" and value.get("actor"):
                 text, info = self._read_long_string(
                     value["actor"], int(value.get("length") or 0), max_chars, timeout)
@@ -1338,9 +1493,17 @@ class FireFoxDebugger:
                         chunks.append(part)
                     pos = end
                     break
-                part = self._substring(actor, pos, end + 1, timeout)
-                if not part:
+                # 只重取末尾这一对代理码元（2 units），让 JSON/UTF-16 解码直接合成单个字符，
+                # 避免 Python 字符串拼出两个孤立代理，也避免重拉整段 200k 分片。
+                pair = self._substring(actor, end - 1, end + 1, timeout)
+                if not pair:
+                    part = part[:-1]
+                    truncated = True
+                    if part:
+                        chunks.append(part)
+                    pos = end - 1
                     break
+                part = part[:-1] + pair
                 end += 1
             chunks.append(part)
             pos = end
@@ -1348,8 +1511,12 @@ class FireFoxDebugger:
         text, dropped = _trim_dangling_surrogate(text)
         if dropped:
             truncated = True
-        return text, {"truncated": truncated, "length": int(length or 0),
-                      "units_read": pos, "long_string_actor": actor}
+        text, replaced = _sanitize_surrogates(text)
+        info = {"truncated": truncated, "length": int(length or 0),
+                "units_read": pos, "long_string_actor": actor}
+        if replaced:
+            info["lone_surrogates_replaced"] = replaced
+        return text, info
 
     def _substring(self, actor: str, start: int, end: int, timeout: float) -> str:
         r = self._call({"to": actor, "type": "substring",
@@ -1589,6 +1756,7 @@ class FireFoxDebugger:
     def resume(self, frame_actor: str | None = None, resume_limit=None) -> dict:
         """继续运行。调用前把 floor 抬到当前序号，之后的 `paused` 才算"新的"。"""
         with self._lock:
+            self._release_cancel()
             thread = self._require_thread()
             self._fresh_floor = self.rdp.mark()
             reply = self._call({"to": thread, "type": "resume",
@@ -1611,8 +1779,10 @@ class FireFoxDebugger:
         """等下一次暂停。只接受 `resume`/`step`/`interrupt` 之后**新到的** `paused`
         （review #4：缓冲里旧的暂停不会被当成新的）。"""
         with self._lock:
+            self._release_cancel()
+            rdp = self._require_rdp()
             floor = self._fresh_floor
-            found = self.rdp.wait_event(
+            found = rdp.wait_event(
                 lambda e: (e.get("type") == "paused"
                            and (bool(e.get("frame")) or not require_frame)),
                 timeout, since=floor)
@@ -1630,6 +1800,7 @@ class FireFoxDebugger:
         空包，真正的 `paused` 在下一个语句执行时才到。
         """
         with self._lock:
+            self._release_cancel()
             thread = self._require_thread()
             self._fresh_floor = self.rdp.mark()
             reply = self._call({"to": thread, "type": "interrupt",
@@ -1662,6 +1833,7 @@ class FireFoxDebugger:
         """暂停中求值。表达式自己命中断点（页面停住）时立刻返回 `paused` 错误，
         而不是干等到超时再返回全 null（review #12）。"""
         with self._lock:
+            self._release_cancel()
             console = self.console
             if not console:
                 tgt = self._call({"to": self.tab, "type": "getTarget"}, 20) or {}
@@ -1712,6 +1884,7 @@ class FireFoxDebugger:
             页面加载期间执行的代码也断得到。
         """
         with self._lock:
+            self._release_cancel()
             rdp = self._require_rdp()
             thread = self._require_thread()
             old_target, old_thread = self.target, self.thread
@@ -1829,7 +2002,13 @@ def _prepare_unix_dir(path: str) -> None:
 
 
 def make_unix_socket_path() -> str:
-    base = tempfile.mkdtemp(prefix="rdp_sock_")
+    if os.name == "nt" or not hasattr(socket, "AF_UNIX"):
+        raise RdpError("unix_socket 仅支持 macOS/Linux；Windows 请使用默认的随机 loopback 端口")
+    tmp_dir: str | None = None
+    probe = os.path.join(tempfile.gettempdir(), "rdp_sock_xxxxxxxx", "rdp.sock")
+    if len(probe.encode("utf-8")) > 96 and os.path.isdir("/tmp"):
+        tmp_dir = "/tmp"
+    base = tempfile.mkdtemp(prefix="rdp_sock_", dir=tmp_dir)
     try:
         os.chmod(base, 0o700)
     except OSError:
