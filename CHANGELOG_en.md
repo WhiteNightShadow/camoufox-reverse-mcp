@@ -4,7 +4,7 @@
 
 Full notes for v1.1.1 and later are in [docs/releases](docs/releases) (Chinese). Packages are on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases).
 
-## Unreleased — Firefox RDP debugging
+## v1.11.0 (2026-11-15) — Firefox RDP Debugging
 
 - New `rdp_debugger(action=...)` driving Firefox's native RDP (`-start-debugger-server`) to add real breakpoints, stepping, call stacks, scopes, paused-frame evaluation and request breakpoints. Firefox has no CDP and the Playwright side can only replay after the fact, so this covers "stop on a line and read locals"; `action` accepts `launch`, `attach`, `enable`, `sources`, `source`, `breakable_lines`, `breakable_positions`, `set_breakpoint`, `remove_breakpoint`, `wait_paused`, `frames`, `scopes`, `evaluate`, `step`, `resume`, `interrupt`, `reload`, `xhr_breakpoint`, `status`, `close`
 - `evaluate` drives page logic without pausing (clicking, calling page functions), so Playwright interaction is no longer required for that; `xhr_breakpoint` pauses right before a request is sent and matches both `fetch` and XHR, which is the practical way to capture payloads built inside obfuscated code
@@ -15,6 +15,8 @@ Full notes for v1.1.1 and later are in [docs/releases](docs/releases) (Chinese).
 - The tool layer no longer turns errors into success: `frames` / `scopes` / `step` / `evaluate` return `{"error": ...}` for `wrongState`, `noSuchActor` and friends; an expression that hits a breakpoint returns `paused-while-evaluating` immediately instead of timing out with a pile of `null`; `source` fetches long scripts in UTF-16 code units (emoji cannot shift or split a character) and flags `max_chars` truncation; a bad `direction` on `step` errors out instead of raising `KeyError`
 - `--self-test` now uses `about:blank` plus an injected script instead of a third-party site; both the smoke test and the self-test have been exercised end-to-end on Windows (camoufox 152 reverse.5) and macOS (official Camoufox 158 `Camoufox.app`, stock Firefox Nightly, and `unix_socket=true`). Executable discovery and `build_launch_plan` never trigger silent Camoufox downloads, `attach` + `close` preserves external Unix sockets, `wait_paused` recovers cleanly after request cancellation, and signal cleanup registers on the main thread
 - Thanks to [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) for contributing the feature (#27)
+
+See the [Chinese release notes](docs/releases/v1.11.0.md).
 
 ## v1.10.0 (2026-11-12) — Instrumentation Defaults, Offline Rewrite, Iframe Logs, Presets in the Main World
 

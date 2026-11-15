@@ -4,7 +4,7 @@
 
 v1.1.1 起每个版本的完整说明在 [docs/releases](docs/releases)，发布包在 [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases)。
 
-## 未发布 — Firefox RDP 断点调试
+## v1.11.0（2026-11-15）— Firefox RDP 断点调试
 
 - 新增 `rdp_debugger(action=...)`：走 Firefox 原生 RDP（`-start-debugger-server`）补齐「真断点 / 单步 / 调用栈 / 作用域 / 暂停中求值 / 请求断点」。Firefox 没有 CDP，Playwright 侧只能事后回放，这个工具解决"停在某一行看局部变量"的需求；`action` 支持 `launch`、`attach`、`enable`、`sources`、`source`、`breakable_lines`、`breakable_positions`、`set_breakpoint`、`remove_breakpoint`、`wait_paused`、`frames`、`scopes`、`evaluate`、`step`、`resume`、`interrupt`、`reload`、`xhr_breakpoint`、`status`、`close`
 - `evaluate` 可在不暂停的情况下驱动页面自身逻辑（点按钮、调用页面函数），不必再依赖 Playwright 交互；`xhr_breakpoint` 在请求发出前暂停，`fetch` 与 XHR 都命中，适合抓 `data` 这类被混淆代码构造的入参
@@ -15,6 +15,8 @@ v1.1.1 起每个版本的完整说明在 [docs/releases](docs/releases)，发布
 - 工具层不再把错误变成成功：`frames` / `scopes` / `step` / `evaluate` 收到 `wrongState`、`noSuchActor` 等回复时返回 `{"error": ...}`；表达式命中断点时立刻返回 `paused-while-evaluating`，不会再等满超时给一堆 `null`；`source` 取长脚本按 UTF-16 码元分片（含 emoji 不会错位或半个字符），`max_chars` 截断显式标记；`step` 的 `direction` 写错报错而不是 `KeyError`
 - `--self-test` 改为 `about:blank` + 注入脚本，不再访问第三方站点；冒烟测试与自测已在 Windows（camoufox 152 reverse.5）与 macOS（官方 Camoufox 158 `Camoufox.app`、原版 Firefox Nightly、`unix_socket=true`）实跑通过；探测路径与 `build_launch_plan` 禁止触发 Camoufox 自动下载；`attach` 断开不会误删外部 Unix socket；取消一次 `wait_paused` 后后续调用正常恢复；主线程入口确保信号清理可靠注册
 - 感谢 [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) 贡献这个功能（#27）
+
+详情见 [v1.11.0](docs/releases/v1.11.0.md)。
 
 ## v1.10.0（2026-11-12）— 插桩默认值、离线改写、iframe 日志与 preset 主世界
 
