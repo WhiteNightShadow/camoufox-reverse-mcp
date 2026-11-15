@@ -892,14 +892,21 @@ def test_camoufox_exe_expands_home(tmp_path, monkeypatch):
     assert detect_browser_executable() == str(exe)
 
 
+@pytest.mark.skipif(os.name == "nt" or not hasattr(socket, "AF_UNIX"),
+                    reason="unix_socket 仅支持 macOS/Linux")
 def test_unix_socket_path_is_private():
     path = Path(make_unix_socket_path())
     assert path.parent.is_dir()
-    if os.name != "nt":
-        assert (path.parent.stat().st_mode & 0o077) == 0, "临时目录必须是 0700"
+    assert (path.parent.stat().st_mode & 0o077) == 0, "临时目录必须是 0700"
     for child in Path(path.parent).iterdir():
         child.unlink(missing_ok=True)
     Path(path.parent).rmdir()
+
+
+def test_make_unix_socket_path_rejects_windows(monkeypatch):
+    monkeypatch.setattr(os, "name", "nt")
+    with pytest.raises(RdpError, match="Windows"):
+        make_unix_socket_path()
 
 
 def test_unix_socket_requires_platform_support(tmp_path):
@@ -1561,6 +1568,8 @@ async def test_install_cleanup_registers_signals_from_main_thread_after_worker(m
         tool._PREVIOUS_SIGNAL_HANDLERS.update(prev_map)
 
 
+@pytest.mark.skipif(os.name == "nt" or not hasattr(socket, "AF_UNIX"),
+                    reason="unix_socket 仅支持 macOS/Linux")
 def test_unix_socket_path_stays_within_af_unix_limit(tmp_path, monkeypatch):
     """TMPDIR 过长时（macOS 常见），Unix socket 路径仍须控制在 AF_UNIX 长度上限内。"""
     long_tmp = tmp_path / ("very_long_tmpdir_segment_" * 4)
@@ -1570,8 +1579,7 @@ def test_unix_socket_path_stays_within_af_unix_limit(tmp_path, monkeypatch):
     sock_path = Path(make_unix_socket_path())
     try:
         assert len(str(sock_path).encode("utf-8")) <= 100, str(sock_path)
-        if os.name != "nt":
-            assert (sock_path.parent.stat().st_mode & 0o077) == 0
+        assert (sock_path.parent.stat().st_mode & 0o077) == 0
     finally:
         for child in sock_path.parent.iterdir():
             child.unlink(missing_ok=True)
