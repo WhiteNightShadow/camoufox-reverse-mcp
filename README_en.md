@@ -77,8 +77,8 @@ Add this to your client's MCP configuration, such as `.cursor/mcp.json` for Curs
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and git first, then run these once in a terminal:
 
 ```bash
-uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.11.0" camoufox-reverse-mcp --version
-uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.11.0" camoufox fetch
+uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.11.1" camoufox-reverse-mcp --version
+uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.11.1" camoufox fetch
 ```
 
 The first command downloads the dependencies and confirms the version, which keeps your client from timing out on the first start. The second downloads the browser into your user cache, so clearing uvx environments does not remove it.
@@ -92,7 +92,7 @@ Add this to your client's MCP configuration:
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.11.0",
+        "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.11.1",
         "camoufox-reverse-mcp"
       ]
     }
@@ -103,18 +103,18 @@ Add this to your client's MCP configuration:
 Claude Code can add it with one command:
 
 ```bash
-claude mcp add --scope user camoufox-reverse -- uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.11.0" camoufox-reverse-mcp
+claude mcp add --scope user camoufox-reverse -- uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.11.1" camoufox-reverse-mcp
 ```
 
 <details>
 <summary>Updating and persistent installs</summary>
 
-**Updating**: find the latest tag on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases), change `@v1.11.0` in the configuration to it, and restart your client. A tag never moves on its own. Without `@v1.11.0`, every start follows the latest commit on main, which is not recommended for daily use. If `check_environment` reports a missing browser, run `camoufox fetch` again with the new tag.
+**Updating**: find the latest tag on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases), change `@v1.11.1` in the configuration to it, and restart your client. A tag never moves on its own. Without `@v1.11.1`, every start follows the latest commit on main, which is not recommended for daily use. If `check_environment` reports a missing browser, run `camoufox fetch` again with the new tag.
 
 **Persistent install**: set `command` to `camoufox-reverse-mcp` and leave out `args`. Fetch the browser with the `uvx ... camoufox fetch` command above, because both setups share the same browser.
 
 ```bash
-uv tool install "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.11.0"
+uv tool install "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.11.1"
 uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@<new-tag>"
 ```
 
@@ -183,9 +183,9 @@ Put them after the start command. With uvx, put them after `camoufox-reverse-mcp
 
 ## Changelog
 
+- **v1.11.1** (2026-11-15): skips the two POSIX Unix-socket path tests on Windows CI and aligns release note validation with the automated release workflow. [Notes](docs/releases/v1.11.1.md)
 - **v1.11.0** (2026-11-15): adds `rdp_debugger` over Firefox's native RDP for real breakpoints, stepping, call stacks, scopes, paused-frame evaluation and pre-request breakpoints; shares `launch_browser` fingerprint/proxy/active-build settings and supports 0700 Unix sockets on macOS/Linux (42 tools in total). [Notes](docs/releases/v1.11.0.md)
 - **v1.10.0** (2026-11-12): instrumentation rewrites member reads only by default, accepts files up to 2 MB, rewrites local source offline and slices logs by seq and state; same-origin iframes log into the top frame; presets run in the page main world; `compare_env` exports an environment bundle; adds `stage_break` and `trace_session`. [Notes](docs/releases/v1.10.0.md)
-- **v1.9.4** (2026-11-10): `instrumentation` adds `tap_stage_calls`, which records the dispatcher calls of flattened VMPs state by state for comparison with local env emulation. [Notes](docs/releases/v1.9.4.md)
 
 See [CHANGELOG_en.md](CHANGELOG_en.md) for every version.
 

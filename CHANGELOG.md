@@ -4,6 +4,13 @@
 
 v1.1.1 起每个版本的完整说明在 [docs/releases](docs/releases)，发布包在 [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases)。
 
+## v1.11.1（2026-11-15）— Windows 测试跳过与自动发版校验对齐
+
+- 修复 `test_debugger_rdp.py` 中两条 POSIX Unix socket 路径测试在 Windows CI 未跳过的问题，并补充全平台验证 `make_unix_socket_path()` 在 Windows 下显式报错的单测
+- 去重 `.github/workflows/ci.yml` 中重复列出的 `tests/test_debugger_rdp.py`，并对齐 Release Notes 章节格式以通过自动发布流水线
+
+详情见 [v1.11.1](docs/releases/v1.11.1.md)。
+
 ## v1.11.0（2026-11-15）— Firefox RDP 断点调试
 
 - 新增 `rdp_debugger(action=...)`：走 Firefox 原生 RDP（`-start-debugger-server`）补齐「真断点 / 单步 / 调用栈 / 作用域 / 暂停中求值 / 请求断点」。Firefox 没有 CDP，Playwright 侧只能事后回放，这个工具解决"停在某一行看局部变量"的需求；`action` 支持 `launch`、`attach`、`enable`、`sources`、`source`、`breakable_lines`、`breakable_positions`、`set_breakpoint`、`remove_breakpoint`、`wait_paused`、`frames`、`scopes`、`evaluate`、`step`、`resume`、`interrupt`、`reload`、`xhr_breakpoint`、`status`、`close`

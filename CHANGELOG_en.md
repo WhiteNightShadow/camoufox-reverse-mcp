@@ -4,6 +4,13 @@
 
 Full notes for v1.1.1 and later are in [docs/releases](docs/releases) (Chinese). Packages are on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases).
 
+## v1.11.1 (2026-11-15) — Windows Test Skips and Release Workflow Alignment
+
+- Skip the two POSIX Unix-socket path tests in `test_debugger_rdp.py` on Windows CI and add a cross-platform unit test verifying `make_unix_socket_path()` rejects Windows explicitly
+- Deduplicate `tests/test_debugger_rdp.py` in `.github/workflows/ci.yml` and align release note headings with the automated release workflow
+
+See the [Chinese release notes](docs/releases/v1.11.1.md).
+
 ## v1.11.0 (2026-11-15) — Firefox RDP Debugging
 
 - New `rdp_debugger(action=...)` driving Firefox's native RDP (`-start-debugger-server`) to add real breakpoints, stepping, call stacks, scopes, paused-frame evaluation and request breakpoints. Firefox has no CDP and the Playwright side can only replay after the fact, so this covers "stop on a line and read locals"; `action` accepts `launch`, `attach`, `enable`, `sources`, `source`, `breakable_lines`, `breakable_positions`, `set_breakpoint`, `remove_breakpoint`, `wait_paused`, `frames`, `scopes`, `evaluate`, `step`, `resume`, `interrupt`, `reload`, `xhr_breakpoint`, `status`, `close`
