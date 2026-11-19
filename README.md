@@ -77,8 +77,8 @@ python -m camoufox fetch
 先安装 [uv](https://docs.astral.sh/uv/getting-started/installation/) 和 git，再在终端各运行一次：
 
 ```bash
-uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.11.1" camoufox-reverse-mcp --version
-uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.11.1" camoufox fetch
+uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.12.0" camoufox-reverse-mcp --version
+uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.12.0" camoufox fetch
 ```
 
 第一条下载依赖并确认版本，可以避免客户端首次启动时等待超时。第二条下载浏览器，保存在用户缓存目录，不随 uvx 环境清理。
@@ -92,7 +92,7 @@ uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.11.1",
+        "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.12.0",
         "camoufox-reverse-mcp"
       ]
     }
@@ -103,18 +103,18 @@ uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.
 Claude Code 也可以用一条命令添加：
 
 ```bash
-claude mcp add --scope user camoufox-reverse -- uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.11.1" camoufox-reverse-mcp
+claude mcp add --scope user camoufox-reverse -- uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.12.0" camoufox-reverse-mcp
 ```
 
 <details>
 <summary>更新版本与常驻安装</summary>
 
-**更新版本**：在 [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases) 查看最新标签，把配置里的 `@v1.11.1` 改成新标签，再重启客户端。标签是固定的，不改就不会变。去掉 `@v1.11.1` 会在每次启动时跟随 main 的最新提交，不建议在日常使用时这样配置。如果 `check_environment` 提示缺少浏览器，用新标签再运行一次 `camoufox fetch`。
+**更新版本**：在 [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases) 查看最新标签，把配置里的 `@v1.12.0` 改成新标签，再重启客户端。标签是固定的，不改就不会变。去掉 `@v1.12.0` 会在每次启动时跟随 main 的最新提交，不建议在日常使用时这样配置。如果 `check_environment` 提示缺少浏览器，用新标签再运行一次 `camoufox fetch`。
 
 **常驻安装**：配置里的 `command` 写 `camoufox-reverse-mcp`，不需要 `args`。浏览器仍用上面的 `uvx ... camoufox fetch` 下载，两种方式共用同一份浏览器。
 
 ```bash
-uv tool install "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.11.1"
+uv tool install "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.12.0"
 uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@<新标签>"
 ```
 
@@ -183,6 +183,7 @@ uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-revers
 
 ## 更新记录
 
+- **v1.12.0**（2026-11-19）：`instrumentation` 新增 `inject` 源码级正则插桩（opcode 换 build 也能打点，命中落在字符串/注释里会跳过并报告）；`intercept_request` 的 `mock_response` 支持 `body_file`（可注入 270KB 改造版脚本，按请求重读）；`rdp_debugger` 的 `set_breakpoint` 支持 `url_pattern` + `find` 正则定位，导航/reload 后自动重算偏移并重下。[详情](docs/releases/v1.12.0.md)
 - **v1.11.1**（2026-11-15）：修复 Windows CI 下两条 POSIX Unix socket 路径测试未跳过的问题，并对齐自动发布流水线校验。[详情](docs/releases/v1.11.1.md)
 - **v1.11.0**（2026-11-15）：新增 `rdp_debugger`，走 Firefox 原生 RDP 补齐真断点、单步、调用栈、作用域、暂停帧求值与请求前断点；与 `launch_browser` 共用指纹/代理/激活版本配置，支持 macOS/Linux 0700 Unix socket，工具扩充为 42 个。[详情](docs/releases/v1.11.0.md)
 - **v1.10.0**（2026-11-12）：插桩默认只改写成员读取、文件上限提到 2MB，能离线改写本地源码，日志能按序号和状态切片；同源 iframe 的事件汇总到顶层日志；preset 改装到页面主世界；`compare_env` 能导出环境包；新增 `stage_break` 和 `trace_session`。[详情](docs/releases/v1.10.0.md)

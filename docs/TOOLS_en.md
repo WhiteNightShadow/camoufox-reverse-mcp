@@ -52,7 +52,7 @@
 | `list_network_requests` | List captured requests (filter by URL / domain / method / type / status) |
 | `get_network_request` | Get full request details (`max_body_size` controls body truncation) |
 | `get_request_initiator` | Get JS call stack that initiated a request |
-| `intercept_request` | Intercept requests: log / block / modify / mock / stop |
+| `intercept_request` | Intercept requests: log / block / modify / mock / stop. `mock_response` takes `body` (inline text) or `body_file` (on-disk file, read as UTF-8, relative paths resolve against the server working directory, re-read per request; the two are mutually exclusive) — use the file for large scripts |
 | `export_network_capture` | Export a versioned JSON snapshot; masks header and query values and omits bodies by default, never overwrites a file |
 | `compare_network_requests` | Compare 2 to 10 captured requests without sending requests or launching a browser |
 | `save_response_body` | Save captured response bytes (JS / WASM / JSON / binary) without refetching, never overwrites a file |
@@ -103,6 +103,37 @@ execution-site alignment. Events receive a content-addressed `site_id`;
 `log` returns a `source_sites` sidecar for the intercepted script's original
 character ranges (`rewrite_source` writes `<output_path>.sites.json`). This is
 off by default. It does not guess a VM PC, opcode, or pre-protection source location.
+
+#### Regex insertion across builds (`inject`)
+
+`tap_stage_calls` only matches one fixed flattened-dispatcher shape, while opcode ids
+(`case 0x22 / 0x4b / 0x4e / 0x51`) are **bound to the build** — a new script stops matching.
+`inject` taps whatever the source looks like instead:
+
+```text
+instrumentation(
+  action="install",
+  url_pattern="**/tdc.js*",
+  tag="tdcx",
+  inject=[{
+    "find": r"case (0x[0-9a-f]+):(_0x[0-9a-f]+)\[(_0x[0-9a-f]+)\[\+\+(_0x[0-9a-f]+)\]\]\[\2\[",
+    "before": "try{(window.__hit=window.__hit||[]).push([$1,$4]);}catch(e){}",
+    "group": "write-opcode"
+  }]
+)
+```
+
+- `find` is a Python regex (`re.MULTILINE`) and **every** match in the file is inserted; `$1..$99`/`$0` expand capture groups, `$$` is a literal `$`
+- `before` inserts at the match start, `after` at the match end; both may be given
+- Hit counts: `inject.groups[].matches` in the return value, `status.inject_hits` (accumulated per URL) and `log`; a file with zero hits is listed in `skipped_files` with `reason: "no_inject_matches"`
+- Syntax-safety policy (in priority order):
+  1. every snippet is wrapped into one complete statement (`;` guard front and back) so any statement boundary is a valid insertion point; a single-line snippet keeps the original line numbers (breakpoints stay usable) and a snippet containing `//` is newline-wrapped
+  2. an insertion that lands inside a string / template / comment / regex literal is **skipped** and counted in `inject_literal_skips` and `inject.groups[].literal_skips` (such code would never execute even if it parsed)
+  3. a `before` insert at a `case <expr>:` / `default:` label moves after the label colon (`label_shift`): a switch CaseBlock only allows case/default clauses, so a statement before the first label is a syntax error and one before a later label belongs to the previous clause (it would not run when jumping straight into that case)
+  4. when the original source parses, the result is parsed again; a group that still breaks it is dropped whole with `skipped_groups[].reason: "would break syntax"` (a parseable file is never left broken); a source that never parsed reports `validation: "source_unparseable"` and only rules 1/2 apply, but `mode='ast'` re-parses the injected text with the bundled Acorn and upgrades the result to `validation: "ok (parsed by the mode rewrite)"`, so `inject.validation` is the final verdict
+- Insertion runs **before** the mode rewrite, so `find` always matches the original script and its offsets are not shifted by ast/regex edits; inserted statements may themselves be tapped afterwards (extra log entries only, results unchanged). `inject_validate=False` disables rule 4, rules 1/2 stay active
+- Injected code runs in the page main world like every other instrumented script; read the globals it fills with `evaluate_js("window.__hit || []", world="main")`
+- To preview offline and then serve it back: `instrumentation(action="rewrite_source", source_path=..., output_path=..., inject=[...])`, then `intercept_request(action="mock", url_pattern=..., mock_response={"body_file": output_path})`
 
 ### Cookies & Storage
 | Tool | Description |
@@ -220,11 +251,11 @@ trace_property_access(action="stop", mode="summary")
 | launch | Start a browser with a debug port (random free port by default; inherits the server config; closes a previous session first) |
 | attach | Connect to an already running debug port (`port`, or `socket_path` on macOS/Linux) |
 | enable | `listTabs -> getTarget -> threadActor`, then attach the thread; detaches the previous target first and never jumps back to the first tab |
-| sources | List known scripts (with `sourceStartLine` / `sourceLength`), filterable by `url_substr` |
+| sources | List known scripts (with `sourceStartLine` / `sourceLength`), filterable by `url_substr` or `url_pattern` (glob) |
 | source | Fetch full script source; longString chunks advance by UTF-16 code units and `truncated` is explicit past `max_chars` |
 | breakable_lines | Breakable line numbers of a script |
 | breakable_positions | Breakable positions of a script (or one line): `columns_0based` / `columns_1based` |
-| set_breakpoint | Set a breakpoint: `source_url` uses `sourceUrl` (inline scripts and post-navigation sources get it automatically), `source` uses `sourceId` (eval / `new Function`); `column` is 1-based and snaps to the nearest breakable column; a line without breakable positions returns `installed: false` |
+| set_breakpoint | Set a breakpoint: `url_pattern` + `find` locate it by URL glob and regex (`occurrence` picks the match; the offset is converted to `line/column`, which is what you want when the URL carries random `js_data`), `source_url` uses `sourceUrl` (inline scripts and post-navigation sources get it automatically), `source` uses `sourceId` (eval / `new Function`); `column` is 1-based and snaps to the nearest breakable column; a line without breakable positions returns `installed: false` |
 | remove_breakpoint | Remove line breakpoints using the exact location they were set with; pass `line`/`source`/`source_url`/`url_substr`, or `remove_all=true` to clear everything |
 | wait_paused | Wait for the next pause; only accepts a `paused` that arrived after `resume`/`step`/`interrupt`; returns frame / where / why |
 | frames | Full call stack of the current pause; returns `{"error": "wrongState"}` when not paused |
@@ -233,7 +264,7 @@ trace_property_access(action="stop", mode="summary")
 | step | Step `over` / `into` / `out` (a bad direction errors out); `wrongState` is not reported as stepped |
 | resume | Resume execution |
 | interrupt | Pause without a line breakpoint (single-line JSVMP). `on_next=true` sends the string `when="onNext"` and pauses on the next statement |
-| reload | Reload and rebuild the session: detaches the old target first (otherwise xhr breakpoints on the old thread freeze the page), polls until the new threadActor exists, then attaches and re-applies every breakpoint without a fixed sleep. Breakpoints set by `sourceId` only (eval / `new Function`) cannot survive navigation and are reported in `reapply_skipped` |
+| reload | Reload and rebuild the session: detaches the old target first (otherwise xhr breakpoints on the old thread freeze the page), polls until the new threadActor exists, then attaches and re-applies every breakpoint without a fixed sleep. `url_pattern` + `find` breakpoints re-run `sources()`, recompute the offset and re-download; a regex that no longer matches is reported in `reapply_failed`. Breakpoints set by `sourceId` only (eval / `new Function`) cannot survive navigation and are reported in `reapply_skipped` |
 | xhr_breakpoint | Pause when a request is about to be sent; matches fetch and XHR; `remove=true` removes it with the exact path+method it was set with |
 | status | Session state (port / unix socket, tab, target, thread, last pause reason, breakpoints) |
 | close | End the session and close the browser this session launched |
@@ -256,7 +287,29 @@ Coordinates and verified gotchas:
   `sourceUrl:sourceId:line:column`, so `remove_breakpoint` re-sends the original
   location verbatim. Conversely, a breakpoint set by `source` (sourceId only) is
   bound to one source actor that disappears on navigation; `reload` reports those in
-  `reapply_skipped` — use `source_url` for anything that must survive a reload.
+  `reapply_skipped` — use `url_pattern` + `find` (or `source_url`) for anything that must survive a
+reload.
+- Minimal usage (one pattern for URLs carrying `js_data` and for opcode ids that change per build):
+
+  ```text
+  rdp_debugger(
+    action="set_breakpoint",
+    url_pattern="**/tdc.js*",
+    find=r"case (0x[0-9a-f]+):(_0x[0-9a-f]+)\[",
+    occurrence=1,
+    condition="p === 0x22"
+  )
+  # every later reload re-locates and re-downloads it; inspect reapplied / reapply_failed
+  rdp_debugger(action="reload", wait_page=8)
+  ```
+
+- **Targets whose URL changes on every request (`js_data`, `?t=timestamps`) need `url_pattern` +
+  `find`**: 11 captures of one site can yield 10 different sha256 values, so neither the exact URL nor
+  the source actor survives a reload. The record keeps the glob, regex and `occurrence`, so `reload`
+  and an `enable` that rebuilds the thread re-run `sources()` -> find the new actor -> recompute the
+  offset -> re-download. When the regex no longer matches in the new build, `reapply_failed` reports
+  `{pattern, url_pattern, reason: "regex not found", searched}`. Because the position is expressed by
+  the regex, the same code is still found after the whole script shifts and every line/column changes.
 - `thread.attach` must carry `options:{}`, otherwise the thread stays DETACHED,
   `sources` stays 0 and nothing is reported.
 - `setXHRBreakpoint` requires `method` to be `"ANY"` or a real verb; an empty string

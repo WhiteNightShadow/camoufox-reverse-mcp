@@ -8,6 +8,9 @@ headers; Playwright already decoded the body, so passing back the original
 encoding header makes Firefox decode plaintext again and silently drops the
 response (no responseReceived / loadingFinished event, size 0).
 See https://github.com/WhiteNightShadow/camoufox-reverse-mcp/issues/3
+v1.12.0: `inject` (source-level regex insertion, see utils/regex_inject.py)
+runs before the mode rewrite, so build-bound shapes such as `case 0x22:` can be
+tapped without depending on the flattened-dispatcher form.
 """
 from __future__ import annotations
 import asyncio
@@ -26,6 +29,7 @@ from ..utils.js_rewriter import (
     BREAKS_PLACEHOLDER,
 )
 from ..utils.ast_rewriter import ast_rewrite as _ast_rewrite_py
+from ..utils.regex_inject import apply_inject_groups, validate_inject_specs
 
 # Module-level state for active instrumentation routes
 _active_routes: dict[str, dict] = {}
@@ -85,6 +89,8 @@ async def instrumentation(
     rewrite_member_access: bool = True,
     rewrite_calls: bool = False,
     tap_stage_calls: bool = False,
+    inject: list[dict] | None = None,
+    inject_validate: bool = True,
     max_rewrites: int = 20000,
     fallback_on_error: bool = True,
     ignore_csp: bool = False,
@@ -151,6 +157,34 @@ async def instrumentation(
             This is a literal match, so it also works when the rest of the
             file is not parseable (status then shows "(stage taps only)"), and
             it is independent of `mode`/`filter_*`.
+        inject: source-level regex insertion, independent of `mode` and usable
+            together with `tap_stage_calls`/`filter_*`. A list of
+            `{"find": <regex>, "before": <js>, "after": <js>, "group": <name>}`:
+            every match of `find` (re.MULTILINE) gets `before` inserted at the
+            match start and/or `after` at the match end. `$1..$99`/`$0` in the
+            snippets expand to capture groups, `$$` is a literal `$`.
+            Each snippet is wrapped into one complete statement (`;` guard front
+            and back, newline-wrapped when it contains `//`), so insertion at any
+            statement boundary stays valid and keeps the original line numbers.
+            When the original source parses (esprima) and an insertion would make
+            it unparseable — e.g. the regex hit inside a string literal, comment
+            or regex literal — that whole group is skipped and reported under
+            `inject.skipped_groups` (reason "would break syntax"); sources that
+            never parsed skip that check (`validation: "source_unparseable"`) but
+            still get the literal-region guard and the `;` statement guard, and a
+            successful `mode='ast'` parse of the injected text upgrades the result
+            to `validation: "ok (parsed by the mode rewrite)"`.
+            Per-group hit counts come back in `inject.groups[].matches`, in
+            `status`/`log` as `inject_hits`, and are accumulated per URL.
+            The injected code runs in the page main world like every other
+            instrumented script; read the globals it fills with
+            evaluate_js(expression, world="main"). Practical note: a `before`
+            insert at a `switch` label (`case 0x22:`) belongs to the *previous*
+            case body, so use `after` with a pattern that ends past the label
+            when the statement must run for that state.
+        inject_validate: default True — run the parse check described above.
+            False inserts every match unconditionally (only the `;` statement
+            guard applies).
         include_source_site: attach a stable site_id to tap events, plus an
             original-source range map in the log response. Default False.
         max_rewrites: hard cap on rewrites per file; status lists capped files.
@@ -215,6 +249,8 @@ async def instrumentation(
             rewrite_member_access=rewrite_member_access,
             rewrite_calls=rewrite_calls,
             tap_stage_calls=tap_stage_calls,
+            inject=inject,
+            inject_validate=inject_validate,
             max_rewrites=max_rewrites,
             fallback_on_error=fallback_on_error,
             ignore_csp=ignore_csp,
@@ -244,6 +280,7 @@ async def instrumentation(
             filter_property_names=filter_property_names,
             filter_object_names=filter_object_names,
             include_source_site=include_source_site,
+            inject=inject, inject_validate=inject_validate,
         )
     else:
         return {"error": f"unknown action: {action}. Use install/log/stop/reload/status/rewrite_source"}
@@ -258,6 +295,9 @@ def _skip_hint(reason: str, size: int | None = None) -> str | None:
                 "or on_oversized='force'")
     if reason == "non_success_response":
         return "the server did not answer 2xx; the response was passed on unchanged"
+    if reason == "no_inject_matches":
+        return ("the inject patterns matched nothing in this file; opcode ids and dispatcher "
+                "shapes are build-bound — re-derive `find` from this build's source")
     if reason in ("no_eligible_rewrites", "unsupported_program_syntax"):
         return "nothing to tap with these options (check filters, mode and last_error)"
     return None
@@ -288,6 +328,25 @@ def _record_skip(stats: dict, url: str, size: int, reason: str, **extra) -> None
     _record_file(stats, "skipped_files", url, entry)
 
 
+def _record_inject(stats: dict, outcome: dict) -> None:
+    """Accumulate per-group inject hit counts so status/log can show them."""
+    report = (outcome or {}).get("inject")
+    if not report:
+        return
+    stats["last_inject"] = report
+    hits = stats.setdefault("inject_hits", {})
+    for entry in report.get("groups") or []:
+        name = entry.get("group") or "?"
+        hits[name] = hits.get(name, 0) + int(entry.get("insertions") or 0)
+    skipped = stats.setdefault("inject_skipped", {})
+    for entry in report.get("skipped_groups") or []:
+        skipped[entry.get("group") or "?"] = entry.get("reason") or "skipped"
+    literal = int(report.get("skipped_insertions") or 0)
+    if literal:
+        # 命中落在字符串 / 注释 / 正则字面量里：插进去也不会执行，所以被跳过。
+        stats["inject_literal_skips"] = stats.get("inject_literal_skips", 0) + literal
+
+
 def _route_summary(pattern: str, info: dict | None, options: dict) -> dict:
     """Options and per-file outcomes of one install, for status and log."""
     summary = {"pattern": pattern, "active": info is not None, **options}
@@ -299,6 +358,7 @@ def _route_summary(pattern: str, info: dict | None, options: dict) -> dict:
             "files_passed_through": stats.get("files_passed_through", 0),
             "skipped_files": list(stats.get("skipped_files", {}).values()),
             "capped_files": list(stats.get("capped_files", {}).values()),
+            "inject_hits": stats.get("inject_hits", {}),
         })
     return summary
 
@@ -318,6 +378,10 @@ def _get_status() -> dict:
                 "last_parser_backend": info["stats"].get("last_parser_backend"),
                 "last_skip_reason": info["stats"].get("last_skip_reason"),
                 "last_error": info["stats"].get("last_error"),
+                "inject_hits": info["stats"].get("inject_hits", {}),
+                "inject_skipped": info["stats"].get("inject_skipped", {}),
+                "inject_literal_skips": info["stats"].get("inject_literal_skips", 0),
+                "last_inject": info["stats"].get("last_inject"),
                 "skipped_files": list(info["stats"].get("skipped_files", {}).values()),
                 "capped_files": list(info["stats"].get("capped_files", {}).values()),
                 "cached_urls": len(info["cache"]),
@@ -334,13 +398,27 @@ def _get_status() -> dict:
 def _rewrite_text(src: str, *, mode: str, tag: str, rewrite_member_access: bool,
                   rewrite_calls: bool, tap_stage_calls: bool, max_rewrites: int,
                   fallback_on_error: bool, prop_filter: list[str] | None,
-                  obj_filter: list[str] | None, include_source_site: bool) -> dict:
+                  obj_filter: list[str] | None, include_source_site: bool,
+                  inject: list[dict] | None = None,
+                  inject_validate: bool = True) -> dict:
     """Run the configured rewriter on one decoded source text.
 
     Returns rewritten (None when the parser failed and no fallback applied),
     the rewriter stats, the mode actually used, the edit count and the parser
     error, if any. Shared by the route handler and rewrite_source.
+
+    `inject` (source-level regex insertion) runs on the **original** text before
+    the mode rewrite, so `find` offsets are never shifted by ast/regex edits and
+    the injected statements take part in the same served script. Its report is
+    returned under "inject"; insertion counts as an edit, so a file with only
+    regex inserts is still served instead of being passed through.
     """
+    inject_report = None
+    if inject:
+        applied = apply_inject_groups(src, inject, validate=inject_validate)
+        inject_report = {key: value for key, value in applied.items() if key != "text"}
+        if applied["insertions"]:
+            src = applied["text"]
     rewritten = None
     rewrite_stats: dict = {}
     mode_used = mode
@@ -375,14 +453,29 @@ def _rewrite_text(src: str, *, mode: str, tag: str, rewrite_member_access: bool,
         # The parser could not read this file; only stage taps were added.
         mode_used = f"{mode_used} (stage taps only)"
         error = rewrite_stats.get("error")
+    injected = (inject_report or {}).get("insertions", 0)
+    if injected and inject_report is not None and not inject_report.get("validated"):
+        # The mode rewriter parses the *injected* text (esprima, then bundled
+        # acorn for modern syntax), so a successful parse is a real validation
+        # of the insertion for files esprima alone cannot read.
+        if rewrite_stats.get("parsed"):
+            inject_report["validated"] = True
+            inject_report["validation"] = "ok (parsed by the mode rewrite)"
+    if rewritten is None and injected:
+        # AST failed with no fallback, but the regex inserts are literal text:
+        # serve the injected source instead of dropping the file.
+        rewritten = src
+        mode_used = f"{mode_used} (inject only)"
     return {"rewritten": rewritten, "stats": rewrite_stats, "mode_used": mode_used,
-            "edit_count": edit_count or 0, "error": error,
-            "capped": bool(rewrite_stats.get("edits_capped") or rewrite_stats.get("stage_capped"))}
+            "edit_count": (edit_count or 0) + injected, "error": error,
+            "capped": bool(rewrite_stats.get("edits_capped") or rewrite_stats.get("stage_capped")),
+            "inject": inject_report}
 
 
 def _rewrite_source(*, source, source_path, output_path, mode, tag, rewrite_member_access,
                     rewrite_calls, tap_stage_calls, max_rewrites, fallback_on_error,
-                    filter_property_names, filter_object_names, include_source_site) -> dict:
+                    filter_property_names, filter_object_names, include_source_site,
+                    inject=None, inject_validate=True) -> dict:
     """rewrite_source: the install rewrite, applied to local text or a file."""
     try:
         if (source is None) == (source_path is None):
@@ -391,6 +484,11 @@ def _rewrite_source(*, source, source_path, output_path, mode, tag, rewrite_memb
             return {"error": "mode must be 'ast' or 'regex'"}
         if mode == "regex" and (filter_property_names or filter_object_names):
             return {"error": "Property/object filters require mode='ast'; regex cannot preserve selective scope"}
+        if inject:
+            problems = validate_inject_specs(inject)
+            if problems:
+                return {"error": "invalid inject spec: " + "; ".join(problems[:5]),
+                        "inject_problems": problems}
         in_path = None
         if source_path is not None:
             in_path = pathlib.Path(source_path).expanduser().resolve()
@@ -410,7 +508,8 @@ def _rewrite_source(*, source, source_path, output_path, mode, tag, rewrite_memb
             rewrite_calls=rewrite_calls, tap_stage_calls=tap_stage_calls,
             max_rewrites=max_rewrites, fallback_on_error=fallback_on_error,
             prop_filter=filter_property_names or None, obj_filter=filter_object_names or None,
-            include_source_site=include_source_site)
+            include_source_site=include_source_site,
+            inject=inject, inject_validate=inject_validate)
         rewrite_stats = outcome["stats"]
         result = {
             "action": "rewrite_source",
@@ -423,10 +522,13 @@ def _rewrite_source(*, source, source_path, output_path, mode, tag, rewrite_memb
                         "rewrite_calls": rewrite_calls, "tap_stage_calls": tap_stage_calls,
                         "include_source_site": include_source_site, "max_rewrites": max_rewrites,
                         "filter_property_names": filter_property_names,
-                        "filter_object_names": filter_object_names},
+                        "filter_object_names": filter_object_names,
+                        "inject": inject, "inject_validate": inject_validate},
             "edits": outcome["edit_count"],
             "edits_capped": outcome["capped"],
         }
+        if outcome.get("inject"):
+            result["inject"] = outcome["inject"]
         for key in ("member_edits", "call_edits", "method_edits", "stage_edits",
                     "member_access_rewrites", "stage_rewrites"):
             if key in rewrite_stats:
@@ -436,8 +538,12 @@ def _rewrite_source(*, source, source_path, output_path, mode, tag, rewrite_memb
         rewritten = outcome["rewritten"]
         if rewritten is None or not outcome["edit_count"]:
             result["status"] = "unchanged"
-            result["reason"] = (rewrite_stats.get("skipped_reason") or outcome["error"]
-                                or "no_eligible_rewrites")
+            reason = (rewrite_stats.get("skipped_reason") or outcome["error"]
+                      or "no_eligible_rewrites")
+            inject_report = outcome.get("inject") or {}
+            if inject_report.get("groups") and not inject_report.get("insertions"):
+                reason = "no_inject_matches"
+            result["reason"] = reason
             return result
 
         sites = rewrite_stats.get("source_sites", []) if include_source_site else []
@@ -476,7 +582,9 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
                    filter_property_names, filter_object_names,
                    max_file_size, on_oversized,
                    include_source_site=False,
-                   tap_stage_calls=False) -> dict:
+                   tap_stage_calls=False,
+                   inject=None,
+                   inject_validate=True) -> dict:
     try:
         if mode not in ("ast", "regex") or on_oversized not in ("selective", "skip", "force"):
             return {"error": "Invalid mode or on_oversized policy"}
@@ -484,6 +592,11 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
             return {"error": "url_pattern is required for action='install'"}
         if mode == "regex" and (filter_property_names or filter_object_names):
             return {"error": "Property/object filters require mode='ast'; regex cannot preserve selective scope"}
+        if inject:
+            problems = validate_inject_specs(inject)
+            if problems:
+                return {"error": "invalid inject spec: " + "; ".join(problems[:5]),
+                        "inject_problems": problems}
 
         # v1.0.1: use context.route() instead of page.route() for timing
         ctx = browser_manager.contexts.get("default")
@@ -517,7 +630,8 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
         stats = {"files_rewritten": 0, "total_edits": 0, "last_url": None,
                  "last_mode_used": None, "files_seen": 0, "files_passed_through": 0,
                  "cache_hits": 0, "last_parser_backend": None, "last_skip_reason": None,
-                 "last_error": None, "skipped_files": {}, "capped_files": {}}
+                 "last_error": None, "skipped_files": {}, "capped_files": {},
+                 "inject_hits": {}, "inject_skipped": {}, "last_inject": None}
 
         # Build filter sets for selective instrumentation
         prop_filter_set = set(filter_property_names) if filter_property_names else None
@@ -527,6 +641,8 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
             "rewrite_member_access": rewrite_member_access,
             "rewrite_calls": rewrite_calls,
             "tap_stage_calls": tap_stage_calls,
+            "inject": inject,
+            "inject_validate": inject_validate,
             "include_source_site": include_source_site,
             "filter_property_names": filter_property_names,
             "filter_object_names": filter_object_names,
@@ -588,6 +704,7 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
                     prop_filter=list(prop_filter_set) if prop_filter_set else None,
                     obj_filter=list(obj_filter_set) if obj_filter_set else None,
                     include_source_site=include_source_site,
+                    inject=inject, inject_validate=inject_validate,
                 )
                 rewritten = outcome["rewritten"]
                 rewrite_stats = outcome["stats"]
@@ -595,10 +712,16 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
                 edit_count = outcome["edit_count"]
                 stats["last_error"] = outcome["error"]
                 stats["last_parser_backend"] = rewrite_stats.get("parser_backend")
+                _record_inject(stats, outcome)
                 if rewritten is None or not edit_count:
                     stats["last_mode_used"] = "passthrough"
-                    _record_skip(stats, req_url, len(body_bytes),
-                                 rewrite_stats.get("skipped_reason", "no_eligible_rewrites"),
+                    reason = rewrite_stats.get("skipped_reason") or "no_eligible_rewrites"
+                    inject_report = outcome.get("inject") or {}
+                    if inject_report.get("groups") and not inject_report.get("insertions"):
+                        # The regex hit nothing in this build: say so instead of
+                        # reporting a generic "no eligible rewrites".
+                        reason = "no_inject_matches"
+                    _record_skip(stats, req_url, len(body_bytes), reason,
                                  **({"error": outcome["error"]} if outcome["error"] else {}))
                     await route.fulfill(status=resp.status, headers=headers, body=body_bytes)
                     return
@@ -671,6 +794,10 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
             "max_rewrites": max_rewrites,
             "filter_property_names": filter_property_names,
             "filter_object_names": filter_object_names,
+            "inject": inject,
+            "inject_validate": inject_validate,
+            "inject_groups": [str((spec or {}).get("group") or f"inject{index + 1}")
+                              for index, spec in enumerate(inject or [])],
             "note": ("Route active. Navigate or reload to trigger rewrite. "
                      "instrumentation(action='status') lists files passed through unchanged."),
         }

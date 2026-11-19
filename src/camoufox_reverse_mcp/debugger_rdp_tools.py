@@ -141,6 +141,130 @@ def _free_port(host: str = "127.0.0.1") -> int:
         return int(s.getsockname()[1])
 
 
+# ---------------------------------------------------- URL 模式 / 偏移 → 行列
+#
+# `url_pattern` + `find` 让断点不再绑 sourceId：带 `js_data` 的脚本 URL 每次请求
+# 都变（同一个站点 11 次抓包可以出 10 份不同 sha256），source actor 和列号都会
+# 失效；只保留「URL 长什么样 + 正则定位」这两条与 build 无关的信息，导航/reload 后
+# 重新 sources() → 重算偏移 → 重下断点。
+
+#: JS 的行终止符（Firefox 的 source 行号按这套算）。
+_LINE_BREAK_SEARCH = re.compile(r"\r\n|\r|\n|\u2028|\u2029")
+
+
+def glob_to_regex(pattern: str) -> re.Pattern:
+    """Playwright 风格的 URL glob：`**` 跨目录，`*` 不跨 `/`，`?` 单个非 `/` 字符。"""
+    out: list[str] = []
+    index = 0
+    while index < len(pattern):
+        char = pattern[index]
+        if pattern.startswith("**", index):
+            out.append(".*")
+            index += 2
+        elif char == "*":
+            out.append("[^/]*")
+            index += 1
+        elif char == "?":
+            out.append("[^/]")
+            index += 1
+        else:
+            out.append(re.escape(char))
+            index += 1
+    return re.compile("".join(out) + r"\Z", re.S)
+
+
+def glob_match(pattern: str, url: str) -> bool:
+    """`url_pattern` 是否匹配 `url`；空 URL（eval / new Function）永不匹配。"""
+    if not pattern or not url:
+        return False
+    return bool(glob_to_regex(pattern).match(str(url)))
+
+
+def _utf16_units(text: str) -> int:
+    """UTF-16 码元数（RDP 的 line/column 就是这个坐标系）。"""
+    return len(text.encode("utf-16-le")) // 2 if text else 0
+
+
+def offset_to_line_column(text: str, offset: int) -> tuple[int, int]:
+    """把 **Unicode 码点** 偏移换算成 RDP 的 `(line 1-based, column 0-based)`。
+
+    单行 190KB~270KB 的压缩脚本就是这里最常见的输入：整份脚本计 1 行，列号等于
+    该偏移之前的 UTF-16 码元数（emoji 占 2 个）。
+    """
+    offset = max(0, min(int(offset), len(text)))
+    line = 1
+    line_start = 0
+    for match in _LINE_BREAK_SEARCH.finditer(text, 0, offset):
+        line += 1
+        line_start = match.end()
+    return line, _utf16_units(text[line_start:offset])
+
+
+def find_match(text: str, pattern: str, occurrence: int = 1,
+               limit: int = 20000) -> dict | None:
+    """在脚本里按正则定位第 `occurrence` 个匹配，返回偏移与行列。
+
+    正则非法时抛 RdpError；匹配不足 `occurrence` 个时返回 None（调用方决定怎么说）。
+    """
+    if not pattern:
+        raise RdpError("find 不能为空：要给一条能在这个 build 里命中的正则")
+    try:
+        regex = re.compile(pattern, re.MULTILINE)
+    except re.error as exc:
+        raise RdpError("find 正则无效: %s" % exc) from exc
+    total = 0
+    wanted = max(1, int(occurrence or 1))
+    for match in regex.finditer(text):
+        total += 1
+        if total == wanted:
+            line, column = offset_to_line_column(text, match.start())
+            end_line, end_column = offset_to_line_column(text, match.end())
+            return {"occurrence": total, "start": match.start(), "end": match.end(),
+                    "line": line, "column_0based": column,
+                    "end_line": end_line, "end_column_0based": end_column,
+                    "match": match.group(0)[:200],
+                    "groups": [g for g in match.groups()][:10]}
+        if total >= limit:
+            break
+    return None
+
+
+def count_matches(text: str, pattern: str, limit: int = 20000) -> int:
+    """匹配总数（用于报告「正则没命中」时的上下文）。"""
+    try:
+        regex = re.compile(pattern or "", re.MULTILINE)
+    except re.error:
+        return 0
+    if not pattern:
+        return 0
+    total = 0
+    for _ in regex.finditer(text):
+        total += 1
+        if total >= limit:
+            break
+    return total
+
+
+def _line_candidates(line: int, source_start_line) -> list[int]:
+    """同一处代码可能的行号：source 自身行号，以及内联脚本的文档行号。
+
+    内联脚本的可断行是**HTML 文档行号**（`sourceStartLine` 是 `<script>` 所在行），
+    文件脚本则是自身行号。两个候选都试，取 `getBreakpointPositionsCompressed`
+    真的有可停位置的那个——所以不会凭猜测装一个错误行。
+    """
+    out = [int(line)]
+    try:
+        start = int(source_start_line or 0)
+    except (TypeError, ValueError):
+        start = 0
+    if start > 0:
+        for delta in (start - 1, start):
+            candidate = int(line) + delta
+            if candidate > 0 and candidate not in out:
+                out.append(candidate)
+    return out
+
+
 def _port_in_use(port: int, host: str = "127.0.0.1") -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.5)
@@ -1317,6 +1441,16 @@ class FireFoxDebugger:
             info.update(self.attach_thread())
             info["detached_previous_thread"] = bool(old_thread and old_thread != self.thread)
             self._fresh_floor = rdp.mark()
+            if old_thread and old_thread != self.thread and (self.breakpoints or self.xhr_breakpoints):
+                # 线程重建（换标签页 / attach 到新 thread）：带 locator 的断点会按
+                # url_pattern + find 重新定位重下，其余按原 location 重发。
+                outcome = self._reapply_breakpoints()
+                info["reapplied"] = outcome["reapplied"]
+                info["xhr_reapplied"] = outcome["xhr_reapplied"]
+                if outcome["failures"]:
+                    info["reapply_failed"] = outcome["failures"]
+                if outcome["skipped"]:
+                    info["reapply_skipped"] = outcome["skipped"]
             return info
 
     def _pick_tab(self, tabs: list[dict], url_substr: str | None) -> dict:
@@ -1383,8 +1517,13 @@ class FireFoxDebugger:
             return list(r.get("sources") or [])
 
     def resolve_sources(self, source_actor: str | None = None, source_url: str | None = None,
-                        url_substr: str | None = None) -> list[dict]:
-        """按 source actor / 精确 URL / URL 子串定位脚本，绝不静默取第一个（review #7）。"""
+                        url_substr: str | None = None,
+                        url_pattern: str | None = None) -> list[dict]:
+        """按 source actor / 精确 URL / URL 子串 / URL glob 定位脚本，绝不静默取第一个（review #7）。
+
+        `url_pattern` 是 glob（`**/tdc.js*`）：URL 里带随机 `js_data` 的目标只能这样指认，
+        因为精确 URL 每次请求都变。
+        """
         with self._lock:
             all_sources = self.sources()
             if source_actor:
@@ -1400,6 +1539,13 @@ class FireFoxDebugger:
                     raise RdpError("没有 URL 为 %r 的脚本；已知 URL: %s"
                                    % (source_url, _urls_preview(all_sources)))
                 return matches
+            if url_pattern:
+                matches = [s for s in all_sources
+                           if glob_match(url_pattern, str(s.get("url") or ""))]
+                if not matches:
+                    raise RdpError("url_pattern=%r 没有匹配的脚本；已知 URL: %s"
+                                   % (url_pattern, _urls_preview(all_sources)))
+                return matches
             if url_substr:
                 matches = [s for s in all_sources
                            if url_substr in str(s.get("url") or "")]
@@ -1409,8 +1555,8 @@ class FireFoxDebugger:
                                    % (url_substr, _urls_preview(all_sources)))
                 return matches
             raise RdpError(
-                "需要 source（source actor）、source_url（精确 URL）或 url_substr 之一；"
-                "已知脚本: %s" % _urls_preview(all_sources))
+                "需要 source（source actor）、source_url（精确 URL）、url_pattern（URL glob）"
+                " 或 url_substr 之一；已知脚本: %s" % _urls_preview(all_sources))
 
     def breakable_lines(self, source_actor: str) -> list[int]:
         with self._lock:
@@ -1538,22 +1684,100 @@ class FireFoxDebugger:
         return value, None
 
     # ---------- 断点 ----------
-    def set_breakpoint(self, line: int, column: int | None = None,
-                       condition: str | None = None, source_actor: str | None = None,
-                       source_url: str | None = None, url_substr: str | None = None) -> dict:
-        """下断点（review #7 #8）。
+    def _breakable_columns(self, source: dict, line: int) -> tuple[list[int], int]:
+        """该 source 在某行的可停列；顺带处理内联脚本的文档行号，返回 (columns, line)。"""
+        positions = self.breakable_positions(source["actor"], line)
+        columns = positions.get(line) or []
+        if columns:
+            return columns, line
+        for candidate in _line_candidates(line, source.get("sourceStartLine")):
+            if candidate == line:
+                continue
+            alt = self.breakable_positions(source["actor"], candidate)
+            if alt.get(candidate):
+                return alt[candidate], candidate
+        return [], line
 
-        * `source_url` / `url_substr` 走 `location.sourceUrl`（Firefox 客户端就是这么做的）：
-          同一 HTML 里第二段及以后的内联脚本、页面刷新/跳转后新建的 source 都会自动挂上；
+    def _locate_by_find(self, *, source_actor: str | None = None,
+                        source_url: str | None = None, url_substr: str | None = None,
+                        url_pattern: str | None = None, find: str = "",
+                        occurrence: int = 1) -> dict:
+        """按正则定位：候选脚本里第一个能命中的 source + 该匹配的行列。"""
+        candidates = self.resolve_sources(source_actor, source_url, url_substr, url_pattern)
+        searched: list[dict] = []
+        wanted = max(1, int(occurrence or 1))
+        for src in candidates:
+            got = self.source_text(src["actor"])
+            text = got.get("text") or ""
+            found = find_match(text, find, wanted)
+            if found is None and got.get("truncated"):
+                searched.append({"actor": src["actor"], "url": src.get("url"),
+                                 "truncated": True,
+                                 "reason": "source longer than max_chars; the match may be "
+                                           "past the truncated part"})
+                continue
+            if not found:
+                searched.append({"actor": src["actor"], "url": src.get("url"),
+                                 "matches": count_matches(text, find),
+                                 "length": len(text)})
+                continue
+            found["source"] = src
+            found["source_actor"] = src["actor"]
+            found["source_url"] = str(src.get("url") or "") or None
+            found["line_basis"] = "source"
+            found["searched"] = searched
+            return found
+        raise RdpError(
+            "find=%r 在 %d 个候选脚本里都没有第 %d 个匹配；已搜索: %s"
+            % (find, len(candidates), wanted,
+               json.dumps(searched, ensure_ascii=False)[:800]))
+
+    def set_breakpoint(self, line: int | None = None, column: int | None = None,
+                       condition: str | None = None, source_actor: str | None = None,
+                       source_url: str | None = None, url_substr: str | None = None,
+                       url_pattern: str | None = None, find: str | None = None,
+                       occurrence: int = 1) -> dict:
+        """下断点（review #7 #8；v1.12.0 起支持 url_pattern + find）。
+
+        * `source_url` / `url_substr` / `url_pattern` 走 `location.sourceUrl`
+          （Firefox 客户端就是这么做的）：同一 HTML 里第二段及以后的内联脚本、
+          页面刷新/跳转后新建的 source 都会自动挂上；`url_pattern` 是 **glob**
+          （`**/tdc.js*`），给 URL 带随机 `js_data` 的目标用；
         * `source_actor` 走 `location.sourceId`，可以断到 `eval` / `new Function`
           这类没有 URL 的代码；
+        * `find` + `occurrence`：在脚本里按正则定位第 N 个匹配，内部把字符偏移换算成
+          `line` / `column`（单行 190KB~270KB 的压缩脚本就是 1 行 + 一个大列号），
+          并把 `url_pattern` / `find` / `occurrence` 记进断点记录——reload / 导航
+          重建 thread 后按它重新 sources() → 重算偏移 → 重下；
         * `line` 是 1-based，坐标就是 `breakable_lines` / `breakable_positions` 报出来的那套；
         * `column` 按 **1-based** 语义接收（`Error.stack` / DevTools 界面的习惯），
           内部转成 0-based 并吸附到该行最近的可停列；
         * 行上没有可停位置时**不报 ok**：返回 `installed=False` 和附近的可断行。
         """
         with self._lock:
-            target_sources = self.resolve_sources(source_actor, source_url, url_substr)
+            located = None
+            locator: dict = {}
+            if find:
+                located = self._locate_by_find(
+                    source_actor=source_actor, source_url=source_url,
+                    url_substr=url_substr, url_pattern=url_pattern,
+                    find=find, occurrence=occurrence)
+                target_sources = [located["source"]]
+                line = located["line"]
+                column = located["column_0based"] + 1  # 接口是 1-based，下面再转回来
+                locator = {"find": find, "occurrence": int(occurrence or 1),
+                           "url_pattern": url_pattern or None}
+                if located.get("source_url"):
+                    source_url, source_actor = located["source_url"], None
+                else:
+                    source_url, source_actor = None, located["source_actor"]
+            else:
+                if not line:
+                    raise RdpError(
+                        "action=\"set_breakpoint\" 需要 line（1-based），或者 "
+                        "find（正则）+ url_pattern / source_url / source / url_substr")
+                target_sources = self.resolve_sources(source_actor, source_url, url_substr,
+                                                      url_pattern)
             line = int(line)
             if line <= 0:
                 raise RdpError("line 必须 >= 1（1-based）")
@@ -1565,19 +1789,29 @@ class FireFoxDebugger:
                 urls = {str(s.get("url") or "") for s in target_sources}
                 if len(urls) != 1:
                     raise RdpError(
-                        "url_substr=%r 匹配到多个 URL: %s；请用 source 或 source_url 指明"
-                        % (url_substr, json.dumps(sorted(urls), ensure_ascii=False)[:300]))
+                        "url_pattern=%r 匹配到多个 URL: %s；请用 source 或 source_url 指明"
+                        % (url_pattern, json.dumps(sorted(urls), ensure_ascii=False)[:300]))
                 location = {"sourceUrl": urls.pop()}
 
-            positions = {}
-            for src in target_sources:
-                try:
-                    positions = self.breakable_positions(src["actor"], line)
-                except RdpError:
-                    positions = {}
-                if positions.get(line):
-                    break
-            columns = positions.get(line) or []
+            positions: dict = {}
+            columns: list[int] = []
+            line_used = line
+            line_basis = "source"
+            if located is not None:
+                columns, line_used = self._breakable_columns(target_sources[0], line)
+                if columns and line_used != line:
+                    line_basis = "document(+sourceStartLine)"
+                if columns:
+                    positions = {line_used: columns}
+            else:
+                for src in target_sources:
+                    try:
+                        positions = self.breakable_positions(src["actor"], line)
+                    except RdpError:
+                        positions = {}
+                    if positions.get(line):
+                        break
+                columns = positions.get(line) or []
 
             if not columns:
                 lines: list[int] = []
@@ -1607,7 +1841,7 @@ class FireFoxDebugger:
                               key=lambda c: (abs(c - requested_col), c < requested_col))
             else:
                 snapped = columns[0]
-            location["line"] = line
+            location["line"] = line_used
             location["column"] = snapped
 
             options = {"condition": condition, "logValue": None, "showStacktrace": None}
@@ -1620,22 +1854,154 @@ class FireFoxDebugger:
             record = {"location": dict(location), "options": options,
                       "source_actor": source_actor,
                       "source_url": location.get("sourceUrl"),
-                      "line": line, "column_0based": snapped}
+                      "line": line_used, "column_0based": snapped}
+            if locator:
+                record["locator"] = {**locator, "line": line_used, "line_basis": line_basis}
             if record not in self.breakpoints:
                 self.breakpoints.append(record)
             out = {"installed": True, "status": "ok",
-                   "location": {"line": line, "column_0based": snapped,
+                   "location": {"line": line_used, "column_0based": snapped,
                                 "column_1based": snapped + 1,
                                 "sourceUrl": location.get("sourceUrl"),
                                 "sourceId": location.get("sourceId")},
                    "breakable_columns_0based": columns,
                    "reply": reply}
+            if located is not None:
+                out["find"] = {"pattern": find, "occurrence": located["occurrence"],
+                               "offset": located["start"], "match": located["match"],
+                               "groups": located["groups"],
+                               "line": line_used, "column_0based": located["column_0based"],
+                               "line_basis": line_basis,
+                               "source_url": located.get("source_url"),
+                               "searched_sources": located.get("searched") or []}
+                out["reload_hint"] = ("导航/reload 会按 url_pattern + find 重新定位并重下"
+                                      "（rdp_debugger(action='reload') 的 reapplied / "
+                                      "reapply_failed 会说明结果）")
             if requested_col is not None and requested_col != snapped:
                 out["snapped_from_column_1based"] = requested_col + 1
                 out["message"] = ("列 %d 不是可停位置，已吸附到最近的 %d（RDP 列号 0-based，"
                                   "可停列见 breakable_columns_0based）"
                                   % (requested_col + 1, snapped + 1))
             return out
+
+    def _reapply_locator(self, rec: dict) -> dict:
+        """按记录里的 `url_pattern` + `find` 在当前 thread 上重新定位并重下断点。"""
+        locator = rec.get("locator") or {}
+        pattern = locator.get("find") or ""
+        glob = locator.get("url_pattern") or ""
+        occurrence = max(1, int(locator.get("occurrence") or 1))
+        try:
+            if glob:
+                candidates = self.resolve_sources(url_pattern=glob)
+            elif rec.get("source_url"):
+                candidates = self.resolve_sources(source_url=rec.get("source_url"))
+            else:
+                return {"pattern": pattern, "reason": "no url_pattern/source_url to re-resolve",
+                        "location": rec.get("location")}
+        except RdpError as exc:
+            return {"pattern": glob or pattern, "reason": "source not found",
+                    "detail": str(exc), "location": rec.get("location")}
+        searched: list[dict] = []
+        for src in candidates:
+            try:
+                text = self.source_text(src["actor"]).get("text") or ""
+            except RdpError as exc:
+                searched.append({"url": src.get("url"), "error": str(exc)})
+                continue
+            try:
+                found = find_match(text, pattern, occurrence)
+            except RdpError as exc:
+                return {"pattern": pattern, "reason": "invalid regex", "detail": str(exc)}
+            if not found:
+                searched.append({"url": src.get("url"),
+                                 "matches": count_matches(text, pattern)})
+                continue
+            try:
+                columns, line = self._breakable_columns(src, found["line"])
+            except RdpError as exc:
+                return {"pattern": pattern, "reason": "positions unavailable",
+                        "detail": str(exc), "url": src.get("url")}
+            if not columns:
+                return {"pattern": pattern, "reason": "no-breakable-position",
+                        "line": found["line"], "url": src.get("url")}
+            snapped = min(columns, key=lambda c: (abs(c - found["column_0based"]),
+                                                  c < found["column_0based"]))
+            url = str(src.get("url") or "")
+            location = {"sourceUrl": url} if url else {"sourceId": src["actor"]}
+            location.update({"line": line, "column": snapped})
+            reply = self._call({"to": self.thread, "type": "setBreakpoint",
+                                "location": location, "options": rec.get("options")}, 20) or {}
+            err = _error_of(reply)
+            if err:
+                return {"pattern": pattern, "reason": "setBreakpoint failed",
+                        "detail": err.get("message") or err.get("error"),
+                        "location": location}
+            rec.update({"location": location, "line": line, "column_0based": snapped,
+                        "source_url": location.get("sourceUrl"),
+                        "source_actor": None if url else src["actor"]})
+            rec["locator"] = {**locator, "line": line}
+            return {"ok": True, "pattern": pattern, "occurrence": occurrence,
+                    "location": location, "match": found["match"],
+                    "column_0based": snapped,
+                    "url": url or None}
+        return {"pattern": pattern, "reason": "regex not found",
+                "url_pattern": glob or None, "occurrence": occurrence,
+                "searched": searched}
+
+    def _reapply_breakpoints(self) -> dict:
+        """在当前 thread 上重下所有已记录的断点（reload / enable 重建 thread 后调用）。
+
+        * 带 `locator`（url_pattern + find）的记录：重新定位、重算行列、重下；
+          正则在新 build 里不再命中时进 `failures`
+          （`{"pattern": ..., "reason": "regex not found"}`），不静默；
+        * 只按 sourceId 下的（eval / new Function）：旧 actor 必然失效，进 `skipped`；
+        * 其余按原 location 原样重发。
+        """
+        rdp = self._require_rdp()
+        reapplied: list[dict] = []
+        xhr_reapplied: list[dict] = []
+        failures: list[dict] = []
+        skipped: list[dict] = []
+        for rec in list(self.breakpoints):
+            if (rec.get("locator") or {}).get("find"):
+                outcome = self._reapply_locator(rec)
+                if outcome.get("ok"):
+                    reapplied.append(outcome["location"])
+                else:
+                    failures.append(outcome)
+                continue
+            if "sourceId" in rec["location"] and "sourceUrl" not in rec["location"]:
+                # sourceId 指向的是旧 thread 的 source actor，导航后必然失效；
+                # 明说做不到，而不是假装重下成功（review #5 / #7）。
+                skipped.append({"location": rec["location"],
+                                "hint": "这个断点只按 sourceId 下的（eval / new Function "
+                                        "这类没有 URL 的代码），导航后 source actor 会消失；"
+                                        "要跨导航请用 url_pattern + find 或 source_url"})
+                continue
+            try:
+                reply = rdp.call({"to": self.thread, "type": "setBreakpoint",
+                                  "location": rec["location"],
+                                  "options": rec["options"]}, 20) or {}
+                err = _error_of(reply)
+                if err:
+                    failures.append({"location": rec["location"], **err})
+                else:
+                    reapplied.append(rec["location"])
+            except RdpError as exc:
+                failures.append({"location": rec["location"], "error": str(exc)})
+        for rec in list(self.xhr_breakpoints):
+            try:
+                reply = rdp.call({"to": self.thread, "type": "setXHRBreakpoint",
+                                  "path": rec["path"], "method": rec["method"]}, 15) or {}
+                if reply.get("value"):
+                    xhr_reapplied.append(dict(rec))
+                else:
+                    failures.append({"xhr": dict(rec), "error": "not-applied"})
+            except RdpError as exc:
+                failures.append({"xhr": dict(rec), "error": str(exc)})
+        return {"reapplied": reapplied, "xhr_reapplied": xhr_reapplied,
+                "failures": failures, "skipped": skipped}
+
 
     def remove_breakpoints(self, line: int | None = None, source_actor: str | None = None,
                            source_url: str | None = None, url_substr: str | None = None,
@@ -1662,8 +2028,11 @@ class FireFoxDebugger:
                         continue
                     if source_url and rec.get("source_url") != source_url:
                         continue
-                    if url_substr and url_substr not in str(rec.get("source_url") or ""):
-                        continue
+                    if url_substr:
+                        locator_pattern = str((rec.get("locator") or {}).get("url_pattern") or "")
+                        if (url_substr not in str(rec.get("source_url") or "")
+                                and url_substr not in locator_pattern):
+                            continue
                     filtered.append(rec)
                 records = filtered
             if not records:
@@ -1922,45 +2291,17 @@ class FireFoxDebugger:
             self.attach_thread()
             self._fresh_floor = rdp.mark()
 
-            reapplied, xhr_reapplied, failures, skipped = [], [], [], []
-            for rec in list(self.breakpoints):
-                if "sourceId" in rec["location"] and "sourceUrl" not in rec["location"]:
-                    # sourceId 指向的是旧 thread 的 source actor，导航后必然失效；
-                    # 明说做不到，而不是假装重下成功（review #5 / #7）。
-                    skipped.append({"location": rec["location"],
-                                    "hint": "这个断点只按 sourceId 下的（eval / new Function "
-                                            "这类没有 URL 的代码），导航后 source actor 会消失；"
-                                            "要跨导航请用 source_url 下断点"})
-                    continue
-                try:
-                    reply = rdp.call({"to": self.thread, "type": "setBreakpoint",
-                                      "location": rec["location"],
-                                      "options": rec["options"]}, 20) or {}
-                    err = _error_of(reply)
-                    (failures if err else reapplied).append(
-                        {"location": rec["location"], **err} if err else rec["location"])
-                except RdpError as exc:
-                    failures.append({"location": rec["location"], "error": str(exc)})
-            for rec in list(self.xhr_breakpoints):
-                try:
-                    reply = rdp.call({"to": self.thread, "type": "setXHRBreakpoint",
-                                      "path": rec["path"], "method": rec["method"]}, 15) or {}
-                    if reply.get("value"):
-                        xhr_reapplied.append(dict(rec))
-                    else:
-                        failures.append({"xhr": dict(rec), "error": "not-applied"})
-                except RdpError as exc:
-                    failures.append({"xhr": dict(rec), "error": str(exc)})
-
+            reapplied_result = self._reapply_breakpoints()
             info = {"thread": self.thread, "target": self.target,
                     "console": self.console, "tab": self.tab, "url": self.tab_url,
                     "elapsed": round(time.monotonic() - started, 2),
                     "detached_previous_target": old_target != self.target,
-                    "reapplied": reapplied, "xhr_reapplied": xhr_reapplied}
-            if failures:
-                info["reapply_failed"] = failures
-            if skipped:
-                info["reapply_skipped"] = skipped
+                    "reapplied": reapplied_result["reapplied"],
+                    "xhr_reapplied": reapplied_result["xhr_reapplied"]}
+            if reapplied_result["failures"]:
+                info["reapply_failed"] = reapplied_result["failures"]
+            if reapplied_result["skipped"]:
+                info["reapply_skipped"] = reapplied_result["skipped"]
             if self._fresh_floor <= old_floor:
                 self._fresh_floor = rdp.mark()
             return info
@@ -1983,7 +2324,8 @@ class FireFoxDebugger:
                 "breakpoints": [{"line": rec["line"],
                                  "column_0based": rec["column_0based"],
                                  "source_url": rec.get("source_url"),
-                                 "source_actor": rec.get("source_actor")}
+                                 "source_actor": rec.get("source_actor"),
+                                 **({"locator": rec["locator"]} if rec.get("locator") else {})}
                                 for rec in self.breakpoints],
                 "xhr_breakpoints": [dict(rec) for rec in self.xhr_breakpoints],
             }

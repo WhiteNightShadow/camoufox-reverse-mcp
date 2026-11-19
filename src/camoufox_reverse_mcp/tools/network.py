@@ -324,6 +324,62 @@ async def get_request_initiator(request_id: int) -> dict:
         return {"error": str(e)}
 
 
+_MOCK_CONTENT_TYPES = {
+    ".js": "application/javascript; charset=utf-8",
+    ".mjs": "application/javascript; charset=utf-8",
+    ".cjs": "application/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".wasm": "application/wasm",
+    ".txt": "text/plain; charset=utf-8",
+}
+
+
+def resolve_mock_body_file(value) -> tuple[Path | None, str | None]:
+    """Resolve `mock_response.body_file`; relative paths use the server workdir."""
+    if not isinstance(value, str) or not value.strip():
+        return None, "mock_response.body_file must be a non-empty path string"
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    try:
+        path = path.resolve()
+    except OSError:
+        pass
+    return path, None
+
+
+def read_mock_body_file(path: Path) -> tuple[str | None, str | None]:
+    """Read a mock body file as UTF-8; return (text, readable error)."""
+    try:
+        if path.is_dir():
+            # Windows raises PermissionError for a directory; check first so the
+            # operator sees which argument was wrong.
+            return None, f"mock_response.body_file is a directory: {path}"
+        return path.read_text(encoding="utf-8"), None
+    except FileNotFoundError:
+        return None, (f"mock_response.body_file not found: {path} "
+                      f"(relative paths resolve against the server working directory {Path.cwd()})")
+    except IsADirectoryError:
+        return None, f"mock_response.body_file is a directory: {path}"
+    except UnicodeDecodeError as exc:
+        return None, f"mock_response.body_file is not valid UTF-8: {path}: {exc}"
+    except OSError as exc:
+        return None, f"mock_response.body_file could not be read: {path}: {exc}"
+
+
+def _mock_headers(resp: dict, body_file: Path | None) -> dict:
+    """Explicit headers win; a body_file without headers gets a suffix-based type."""
+    headers = resp.get("headers")
+    if headers:
+        return dict(headers)
+    if body_file is not None:
+        return {"content-type": _MOCK_CONTENT_TYPES.get(body_file.suffix.lower(),
+                                                        "application/octet-stream")}
+    return {"content-type": "application/json"}
+
+
 @mcp.tool()
 async def intercept_request(
     url_pattern: str,
@@ -339,7 +395,20 @@ async def intercept_request(
         action: "log", "block", "modify", "mock", or "stop" (unroute).
         modify_headers: Headers to add/override (action="modify").
         modify_body: Request body replacement (action="modify").
-        mock_response: Dict with "status", "headers", "body" (action="mock").
+        mock_response: Dict for action="mock": "status", "headers", and exactly
+            one body source —
+            "body" (inline text) or "body_file" (path, read as UTF-8; relative
+            paths resolve against the server working directory). Passing both is
+            an error. The file is re-read on every request, so editing the
+            instrumented script and reloading the page is enough to pick up a
+            change; a missing or unreadable file returns a readable error from
+            the tool call (and aborts that request during serving). When
+            "headers" is omitted, body_file infers the content type from its
+            suffix (.js/.json/.html/.css/...) instead of defaulting to JSON.
+
+    Returns:
+        dict with the interception status; for action="mock" with body_file it
+        also reports the resolved absolute path and its current byte size.
     """
     try:
         page = await browser_manager.get_active_page()
@@ -351,6 +420,28 @@ async def intercept_request(
             else:
                 await page.unroute("**/*")
                 return {"status": "stopped_all"}
+
+        resp = dict(mock_response or {})
+        body_file: Path | None = None
+        body_file_bytes: int | None = None
+        if action == "mock":
+            inline_body = resp.get("body")
+            raw_file = resp.get("body_file")
+            if inline_body is not None and raw_file:
+                return {"error": "mock_response: pass exactly one of body or body_file",
+                        "pattern": url_pattern}
+            if raw_file:
+                body_file, problem = resolve_mock_body_file(raw_file)
+                if problem:
+                    return {"error": problem, "pattern": url_pattern}
+                text, problem = read_mock_body_file(body_file)
+                if problem:
+                    return {"error": problem, "body_file": str(body_file),
+                            "pattern": url_pattern}
+                body_file_bytes = len(text.encode("utf-8"))
+            elif inline_body is not None and not isinstance(inline_body, str):
+                return {"error": "mock_response.body must be a string; use body_file "
+                                 "for large or on-disk bodies", "pattern": url_pattern}
 
         async def handler(route):
             if action == "log":
@@ -370,7 +461,24 @@ async def intercept_request(
                     overrides["post_data"] = modify_body
                 await route.continue_(**overrides)
             elif action == "mock":
-                resp = mock_response or {}
+                if body_file is not None:
+                    # Re-read per request: an edited instrumented script is picked
+                    # up by the next reload instead of needing a new intercept.
+                    text, problem = read_mock_body_file(body_file)
+                    if problem:
+                        browser_manager._console_logs.append({
+                            "level": "error",
+                            "text": f"[INTERCEPT:mock] {problem}",
+                            "timestamp": time.time() * 1000, "location": None,
+                        })
+                        await route.abort("failed")
+                        return
+                    await route.fulfill(
+                        status=int(resp.get("status", 200)),
+                        headers=_mock_headers(resp, body_file),
+                        body=text,
+                    )
+                    return
                 await route.fulfill(
                     status=resp.get("status", 200),
                     headers=resp.get("headers", {"content-type": "application/json"}),
@@ -378,7 +486,17 @@ async def intercept_request(
                 )
 
         await page.route(url_pattern, handler)
-        return {"status": "intercepting", "pattern": url_pattern, "action": action}
+        result = {"status": "intercepting", "pattern": url_pattern, "action": action}
+        if action == "mock":
+            result["mock"] = {
+                "status": resp.get("status", 200),
+                "headers": _mock_headers(resp, body_file),
+                "body_file": str(body_file) if body_file is not None else None,
+                "body_file_bytes": body_file_bytes,
+                "inline_body": bool(body_file is None and resp.get("body") is not None),
+                "body_reread_per_request": body_file is not None,
+            }
+        return result
     except Exception as e:
         return {"error": str(e)}
 
