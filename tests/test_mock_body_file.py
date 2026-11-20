@@ -58,7 +58,7 @@ def fake_browser(monkeypatch):
 async def test_body_file_is_served_as_the_response(fake_browser, tmp_path):
     page, _ = fake_browser
     body_file = tmp_path / "vm-bundle.instrumented.js"
-    body_file.write_text(INSTRUMENTED, encoding="utf-8")
+    body_file.write_text(INSTRUMENTED, encoding="utf-8", newline="\n")
     result = await network.intercept_request(
         "**/vm-bundle.js*", action="mock",
         mock_response={"body_file": str(body_file), "status": 200,
@@ -81,24 +81,24 @@ async def test_body_file_is_reread_for_every_request(fake_browser, tmp_path):
     """改文件 → 下一次请求就生效，不用重新装 intercept。"""
     page, _ = fake_browser
     body_file = tmp_path / "vm-bundle.js"
-    body_file.write_text("var v = 1;\n", encoding="utf-8")
+    body_file.write_text("var v = 1;\n", encoding="utf-8", newline="\n")
     await network.intercept_request("**/vm-bundle.js*", action="mock",
                                     mock_response={"body_file": str(body_file)})
     first = FakeRoute()
     await page.routes["**/vm-bundle.js*"](first)
     assert first.fulfilled["body"] == "var v = 1;\n"
 
-    body_file.write_text("var v = 2;\n", encoding="utf-8")
+    body_file.write_text("var v = 2;\r\n", encoding="utf-8", newline="")
     second = FakeRoute()
     await page.routes["**/vm-bundle.js*"](second)
-    assert second.fulfilled["body"] == "var v = 2;\n"
+    assert second.fulfilled["body"] == "var v = 2;\r\n"
 
 
 async def test_relative_body_file_resolves_against_the_working_directory(
         fake_browser, tmp_path, monkeypatch):
     page, _ = fake_browser
     (tmp_path / "work").mkdir()
-    (tmp_path / "work" / "vm-bundle.js").write_text(INSTRUMENTED, encoding="utf-8")
+    (tmp_path / "work" / "vm-bundle.js").write_text(INSTRUMENTED, encoding="utf-8", newline="\n")
     monkeypatch.chdir(tmp_path / "work")
     result = await network.intercept_request("**/vm-bundle.js*", action="mock",
                                             mock_response={"body_file": "vm-bundle.js"})
