@@ -33,6 +33,7 @@ from ..debugger_rdp_tools import (
     RdpError,
     _expand,
     _sanitize_surrogates,
+    glob_match,
     make_unix_socket_path,
 )
 
@@ -298,6 +299,8 @@ def _sync_dispatch(action: str, kw: dict) -> dict:
         srcs = dbg.sources()
         if kw["url_substr"]:
             srcs = [s for s in srcs if kw["url_substr"] in str(s.get("url", ""))]
+        if kw["url_pattern"]:
+            srcs = [s for s in srcs if glob_match(kw["url_pattern"], str(s.get("url") or ""))]
         out = [{"actor": s.get("actor"), "url": s.get("url"),
                 "introductionType": s.get("introductionType"),
                 "isInlineSource": s.get("isInlineSource"),
@@ -308,7 +311,8 @@ def _sync_dispatch(action: str, kw: dict) -> dict:
 
     if action == "source":
         matches = dbg.resolve_sources(kw["source"] or None, kw["source_url"] or None,
-                                      kw["url_substr"] or None)
+                                      kw["url_substr"] or None,
+                                      kw["url_pattern"] or None)
         src = matches[0]
         got = dbg.source_text(src["actor"], max_chars=kw["max_chars"])
         text, extra_replaced = _sanitize_surrogates(got.get("text") or "")
@@ -335,14 +339,16 @@ def _sync_dispatch(action: str, kw: dict) -> dict:
 
     if action == "breakable_lines":
         matches = dbg.resolve_sources(kw["source"] or None, kw["source_url"] or None,
-                                      kw["url_substr"] or None)
+                                      kw["url_substr"] or None,
+                                      kw["url_pattern"] or None)
         src = matches[0]
         return {"actor": src["actor"], "url": src.get("url"),
                 "lines": dbg.breakable_lines(src["actor"])[:kw["max_items"]]}
 
     if action == "breakable_positions":
         matches = dbg.resolve_sources(kw["source"] or None, kw["source_url"] or None,
-                                      kw["url_substr"] or None)
+                                      kw["url_substr"] or None,
+                                      kw["url_pattern"] or None)
         src = matches[0]
         positions = dbg.breakable_positions(src["actor"], kw["line"])
         out_lines: dict = {}
@@ -362,19 +368,25 @@ def _sync_dispatch(action: str, kw: dict) -> dict:
         return out
 
     if action == "set_breakpoint":
-        if not kw["line"]:
-            raise RdpError("action=\"set_breakpoint\" 需要 line（1-based）")
+        if not kw["line"] and not kw["find"]:
+            raise RdpError("action=\"set_breakpoint\" 需要 line（1-based），"
+                           "或者 find（正则）+ url_pattern / source_url / source / url_substr")
         return dbg.set_breakpoint(
             kw["line"], kw["column"], kw["condition"],
             source_actor=kw["source"] or None,
             source_url=kw["source_url"] or None,
-            url_substr=kw["url_substr"] or None)
+            url_substr=kw["url_substr"] or None,
+            url_pattern=kw["url_pattern"] or None,
+            find=kw["find"] or None,
+            occurrence=kw["occurrence"])
 
     if action == "remove_breakpoint":
         return dbg.remove_breakpoints(
             line=kw["line"], source_actor=kw["source"] or None,
             source_url=kw["source_url"] or None,
             url_substr=kw["url_substr"] or None,
+            url_pattern=kw["url_pattern"] or None,
+            find=kw["find"] or None,
             remove_all=kw["remove_all"])
 
     if action == "wait_paused":
@@ -527,6 +539,9 @@ async def rdp_debugger(
     max_items: int = 200,
     source: str = "",
     source_url: str = "",
+    url_pattern: str = "",
+    find: str = "",
+    occurrence: int = 1,
     remove_all: bool = False,
     remove: bool = False,
     unix_socket: bool = False,
@@ -550,7 +565,8 @@ async def rdp_debugger(
       source              取脚本全文（longString 分片按 UTF-16 码元推进；超长显式截断）
       breakable_lines     某个脚本的可断行号
       breakable_positions 某脚本/某一行的可停位置（columns_0based / columns_1based）
-      set_breakpoint      下断点（source_url 走 sourceUrl，source 走 sourceId；列号 1-based 自动吸附）
+      set_breakpoint      下断点（url_pattern + find 正则定位，或 source_url 走 sourceUrl、
+                          source 走 sourceId；列号 1-based 自动吸附）
       remove_breakpoint   删行断点（按当初下发的 location 精确删除；remove_all 清空）
       wait_paused         等下一次命中（只接受 resume/step/interrupt 之后新到的 paused）
       frames              当前暂停的完整调用栈（出错时返回 {"error": ...}）
@@ -559,7 +575,8 @@ async def rdp_debugger(
       step                单步 over / into / out
       resume              继续运行
       interrupt           不等断点直接暂停（on_next=true 暂停在下一个语句）
-      reload              刷新并重建会话 + 重下此前全部断点（先 detach 旧 target）
+      reload              刷新并重建会话 + 重下此前全部断点（先 detach 旧 target；
+                          url_pattern+find 的断点会重新 sources() → 重算偏移 → 重下）
       xhr_breakpoint      在请求发出前暂停（path / method；remove=true 移除）
       status              会话状态
       close               结束会话并关闭本次启动的浏览器
@@ -588,6 +605,15 @@ async def rdp_debugger(
         max_items: sources / breakable_lines 返回条数上限。
         source: source actor（set_breakpoint 用它走 sourceId，可断 eval / new Function）。
         source_url: 精确 URL（set_breakpoint 用它走 sourceUrl，内联脚本/导航后都能挂上）。
+        url_pattern: URL **glob**（如 `**/vm-bundle*.js*`），替代 source / source_url。
+            适合 URL 带随机查询参数（每次请求都变）的目标；sources / source /
+            breakable_* / set_breakpoint / remove_breakpoint 都接受它。
+        find: 正则，配合 url_pattern：在脚本里定位第 occurrence 个匹配，内部把字符偏移
+            换算成 line/column（单行 270KB 压缩脚本 = 1 行 + 一个大列号）。断点记录里
+            同时保存 url_pattern/find/occurrence，reload / 导航重建 thread 后自动
+            重新 sources() → 重算 → 重下；新脚本里正则不再命中时进
+            `reapply_failed`（`{"pattern":..., "reason": "regex not found"}`）。
+        occurrence: find 的第几个匹配，默认 1。
         remove_all: remove_breakpoint / xhr_breakpoint 里清空所有已记录断点。
         remove: xhr_breakpoint 用它移除（比 method="remove" 更明确）。
         unix_socket: macOS/Linux 用 0700 临时目录里的 Unix socket 代替 TCP 端口。
@@ -604,7 +630,8 @@ async def rdp_debugger(
               direction=direction, timeout_ms=timeout_ms, path=path, method=method,
               on_next=on_next, require_frame=require_frame, save_path=save_path,
               max_chars=max_chars, max_items=max_items, source=source,
-              source_url=source_url, remove_all=remove_all, remove=remove,
+              source_url=source_url, url_pattern=url_pattern, find=find,
+              occurrence=occurrence, remove_all=remove_all, remove=remove,
               unix_socket=unix_socket, socket_path=socket_path)
     cancel_token = threading.Event()
     kw["_cancel_token"] = cancel_token

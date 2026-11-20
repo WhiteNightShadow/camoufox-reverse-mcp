@@ -4,6 +4,15 @@
 
 v1.1.1 起每个版本的完整说明在 [docs/releases](docs/releases)，发布包在 [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases)。
 
+## v1.12.0（2026-11-20）— 跨 build 正则插桩、磁盘文件 Mock 与动态正则断点
+
+- `instrumentation` 新增 `inject`（源码级正则插桩）：`[{find, before|after, group}]`，对每个匹配在起点前 / 结束点后插入语句，`$1..$99`/`$0` 引用捕获组，每组插入与原始匹配次数在 `inject.groups[]`、`status.inject_hits`、`log` 里可见，与 `tap_stage_calls`、`filter_*` 同时可用。四层语法保护：首尾 `;` 语句包裹（含 `}` 结尾与 `;\n…\n;` 行注释保护）；命中落在字符串/模板（含 `${...}` 嵌套）/注释/正则字面量（区分 `i++/2`、`obj.return / 2` 与 `if (...) /re/`）里时逐处跳过并报 `skipped_insertions`；`before` 落在 `switch` 的 `case`/`default` 标签前时词法跳过三元 `? :` 自动挪到冒号后（`label_shift`），排除 `{default: ...}` 对象属性；原脚本可解析（`esprima` + 本地随包 Acorn 支持现代 ES2025/ESM）时重解析校验并逐组回退
+- `intercept_request` 的 `mock_response` 新增 `body_file`：校验 ≤10 MiB 常规 UTF-8 文件（相对路径按服务器工作目录解析），与 `body` 互斥，前置校验 `status`/`headers`，每次请求在工作线程重读（改完离线改写脚本直接 reload 即生效），`headers` 缺省按后缀推断 `content-type`
+- `rdp_debugger` 新增 `url_pattern`（URL glob，如 `**/vm-bundle*.js*`）+ `find`（正则）+ `occurrence`（≥ 1）：单遍扫描并按 UTF-16 码元换算 `line/column`，`reload` / `enable` 重建 thread 后自动重新 `sources()` → 重算偏移 → 重下（支持中途取消立即退出），未命中写进 `reapply_failed`；`sources` / `source` / `breakable_*` / `remove_breakpoint` 同步支持 `url_pattern`
+- 感谢 [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) 贡献这三个跨构建调试与插桩能力（#28）
+
+详情见 [v1.12.0](docs/releases/v1.12.0.md)。
+
 ## v1.11.1（2026-11-15）— Windows 测试跳过与自动发版校验对齐
 
 - 修复 `test_debugger_rdp.py` 中两条 POSIX Unix socket 路径测试在 Windows CI 未跳过的问题，并补充全平台验证 `make_unix_socket_path()` 在 Windows 下显式报错的单测

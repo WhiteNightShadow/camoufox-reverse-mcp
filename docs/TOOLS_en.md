@@ -52,7 +52,7 @@
 | `list_network_requests` | List captured requests (filter by URL / domain / method / type / status) |
 | `get_network_request` | Get full request details (`max_body_size` controls body truncation) |
 | `get_request_initiator` | Get JS call stack that initiated a request |
-| `intercept_request` | Intercept requests: log / block / modify / mock / stop |
+| `intercept_request` | Intercept requests: log / block / modify / mock / stop. `mock_response` takes `body` (inline text) or `body_file` (regular UTF-8 file <= 10 MiB, relative paths resolve against the server working directory, re-read per request in a worker thread; mutually exclusive — fulfilled responses are readable by page scripts, so never point `body_file` at credentials or private local files) |
 | `export_network_capture` | Export a versioned JSON snapshot; masks header and query values and omits bodies by default, never overwrites a file |
 | `compare_network_requests` | Compare 2 to 10 captured requests without sending requests or launching a browser |
 | `save_response_body` | Save captured response bytes (JS / WASM / JSON / binary) without refetching, never overwrites a file |
@@ -103,6 +103,37 @@ execution-site alignment. Events receive a content-addressed `site_id`;
 `log` returns a `source_sites` sidecar for the intercepted script's original
 character ranges (`rewrite_source` writes `<output_path>.sites.json`). This is
 off by default. It does not guess a VM PC, opcode, or pre-protection source location.
+
+#### Regex insertion across builds (`inject`)
+
+`tap_stage_calls` only matches one fixed flattened-dispatcher shape, while opcode ids
+(`case 0x22 / 0x4b / 0x4e / 0x51`) are **bound to the build** — a new script stops matching.
+`inject` taps whatever the source looks like instead:
+
+```text
+instrumentation(
+  action="install",
+  url_pattern="**/vm-bundle*.js*",
+  tag="vm",
+  inject=[{
+    "find": r"case (0x[0-9a-f]+):(_0x[0-9a-f]+)\[(_0x[0-9a-f]+)\[\+\+(_0x[0-9a-f]+)\]\]\[\2\[",
+    "before": "try{(window.__hit=window.__hit||[]).push([$1,$4]);}catch(e){}",
+    "group": "write-opcode"
+  }]
+)
+```
+
+- `find` is a Python regex (`re.MULTILINE`) and **every** match in the file is inserted (bounded by `max_rewrites`); `$1..$99`/`$0` expand capture groups, `$$` is a literal `$`
+- `before` inserts at the match start, `after` at the match end; both may be given
+- Hit & skip counts: `inject.groups[].insertions` (raw matches in `.matches`), `status`/`log` `inject_hits` (accumulated per group across newly rewritten scripts), `inject_skipped` and `inject_literal_skips`; a file with zero insertions is listed in `skipped_files` as `no_inject_matches`, `inject_literal_only` or `inject_would_break_syntax`
+- Syntax-safety policy (in priority order):
+  1. every snippet is wrapped into a complete statement (`;` guard on both ends, including snippets ending with `}`, or `;\n...\n;` when newlines/`//` are present); single-line snippets add zero newlines (`lines_added == 0`; note that `mode="ast"` prepends the instrumentation runtime header, so only `mode="regex"` with zero member rewrites preserves original 1-based line numbers)
+  2. insertions landing inside string, template (tracking nested `${...}`), comment or regex literals (distinguishing `i++/2`, `obj.return / 2` and `if (...) /re/`) are **skipped** individually and counted in `inject_literal_skips`
+  3. a `before` insert on a `switch` `case <expr>:` / `default:` label lexically skips literals, brackets and ternary `? :` operators to move past the label colon (`label_shift`), while ignoring object properties such as `{default: ...}`
+  4. when the original source parses (`esprima` first, falling back to local bundled Acorn for modern ES2025/module syntax), the injected output is re-parsed and any group that would break syntax is rolled back individually (`skipped_groups[].reason: "would break syntax"`)
+- Insertion runs **before** the mode rewrite, so `find` always matches the original script; `inject_validate=False` skips only rule 4 while keeping rules 1/2/3 active
+- Injected code runs in the page main world like every other instrumented script; read the globals it fills with `evaluate_js("window.__hit || []", world="main")`
+- To preview offline and then serve it back: `instrumentation(action="rewrite_source", source_path=..., output_path=..., inject=[...])`, then `intercept_request(action="mock", url_pattern=..., mock_response={"body_file": output_path})`
 
 ### Cookies & Storage
 | Tool | Description |
@@ -220,12 +251,12 @@ trace_property_access(action="stop", mode="summary")
 | launch | Start a browser with a debug port (random free port by default; inherits the server config; closes a previous session first) |
 | attach | Connect to an already running debug port (`port`, or `socket_path` on macOS/Linux) |
 | enable | `listTabs -> getTarget -> threadActor`, then attach the thread; detaches the previous target first and never jumps back to the first tab |
-| sources | List known scripts (with `sourceStartLine` / `sourceLength`), filterable by `url_substr` |
+| sources | List known scripts (with `sourceStartLine` / `sourceLength`), filterable by `url_substr` or `url_pattern` (glob) |
 | source | Fetch full script source; longString chunks advance by UTF-16 code units and `truncated` is explicit past `max_chars` |
 | breakable_lines | Breakable line numbers of a script |
 | breakable_positions | Breakable positions of a script (or one line): `columns_0based` / `columns_1based` |
-| set_breakpoint | Set a breakpoint: `source_url` uses `sourceUrl` (inline scripts and post-navigation sources get it automatically), `source` uses `sourceId` (eval / `new Function`); `column` is 1-based and snaps to the nearest breakable column; a line without breakable positions returns `installed: false` |
-| remove_breakpoint | Remove line breakpoints using the exact location they were set with; pass `line`/`source`/`source_url`/`url_substr`, or `remove_all=true` to clear everything |
+| set_breakpoint | Set a breakpoint: `url_pattern` + `find` locate it by URL glob and regex (`occurrence` >= 1 picks the match; the offset is converted to `line/column`, suited for URLs carrying dynamic query tokens), `source_url` uses `sourceUrl` (inline scripts and post-navigation sources get it automatically), `source` uses `sourceId` (eval / `new Function`); `column` is 1-based and snaps to the nearest breakable column; a line without breakable positions returns `installed: false` |
+| remove_breakpoint | Remove line breakpoints using the exact location they were set with; pass `line`/`source`/`source_url`/`url_substr`/`url_pattern`/`find`, or `remove_all=true` to clear everything |
 | wait_paused | Wait for the next pause; only accepts a `paused` that arrived after `resume`/`step`/`interrupt`; returns frame / where / why |
 | frames | Full call stack of the current pause; returns `{"error": "wrongState"}` when not paused |
 | scopes | Recursive scope chain and bindings of one frame; requires `frame_actor` |
@@ -233,7 +264,7 @@ trace_property_access(action="stop", mode="summary")
 | step | Step `over` / `into` / `out` (a bad direction errors out); `wrongState` is not reported as stepped |
 | resume | Resume execution |
 | interrupt | Pause without a line breakpoint (single-line JSVMP). `on_next=true` sends the string `when="onNext"` and pauses on the next statement |
-| reload | Reload and rebuild the session: detaches the old target first (otherwise xhr breakpoints on the old thread freeze the page), polls until the new threadActor exists, then attaches and re-applies every breakpoint without a fixed sleep. Breakpoints set by `sourceId` only (eval / `new Function`) cannot survive navigation and are reported in `reapply_skipped` |
+| reload | Reload and rebuild the session: detaches the old target first (otherwise xhr breakpoints on the old thread freeze the page), polls until the new threadActor exists, then attaches and re-applies every breakpoint without a fixed sleep. `url_pattern` + `find` breakpoints re-run `sources()`, recompute the offset and re-download; a regex that no longer matches is reported in `reapply_failed`. Breakpoints set by `sourceId` only (eval / `new Function`) cannot survive navigation and are reported in `reapply_skipped` |
 | xhr_breakpoint | Pause when a request is about to be sent; matches fetch and XHR; `remove=true` removes it with the exact path+method it was set with |
 | status | Session state (port / unix socket, tab, target, thread, last pause reason, breakpoints) |
 | close | End the session and close the browser this session launched |
@@ -256,7 +287,29 @@ Coordinates and verified gotchas:
   `sourceUrl:sourceId:line:column`, so `remove_breakpoint` re-sends the original
   location verbatim. Conversely, a breakpoint set by `source` (sourceId only) is
   bound to one source actor that disappears on navigation; `reload` reports those in
-  `reapply_skipped` — use `source_url` for anything that must survive a reload.
+  `reapply_skipped` — use `url_pattern` + `find` (or `source_url`) for anything that must survive a
+reload.
+- Minimal usage (one pattern for URLs carrying dynamic tokens/hashes and for opcode ids that change per build):
+
+  ```text
+  rdp_debugger(
+    action="set_breakpoint",
+    url_pattern="**/vm-bundle*.js*",
+    find=r"case (0x[0-9a-f]+):(_0x[0-9a-f]+)\[",
+    occurrence=1,
+    condition="p === 0x22"
+  )
+  # every later reload re-locates and re-downloads it; inspect reapplied / reapply_failed
+  rdp_debugger(action="reload", wait_page=8)
+  ```
+
+- **Targets whose URL changes on every request (`?v=hash`, `?t=timestamp`) need `url_pattern` +
+  `find`**: when every request serves a distinct bundle hash, neither the exact URL nor
+  the source actor survives a reload. The record keeps the glob, regex and `occurrence`, so `reload`
+  and an `enable` that rebuilds the thread re-run `sources()` -> find the new actor -> recompute the
+  offset -> re-download. When the regex no longer matches in the new build, `reapply_failed` reports
+  `{pattern, url_pattern, reason: "regex not found", searched}`. Because the position is expressed by
+  the regex, the same code is still found after the whole script shifts and every line/column changes.
 - `thread.attach` must carry `options:{}`, otherwise the thread stays DETACHED,
   `sources` stays 0 and nothing is reported.
 - `setXHRBreakpoint` requires `method` to be `"ANY"` or a real verb; an empty string

@@ -4,6 +4,15 @@
 
 Full notes for v1.1.1 and later are in [docs/releases](docs/releases) (Chinese). Packages are on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases).
 
+## v1.12.0 (2026-11-20) — Cross-Build Regex Injection, Disk Body Mocks, and Pattern Breakpoints
+
+- `instrumentation` gains `inject` (source-level regex insertion): `[{find, before|after, group}]` inserts statements around every match, expands `$1..$99`/`$0`, reports per-group counts in `inject.groups[]` / `status.inject_hits` / `log`, and combines with `tap_stage_calls` and `filter_*`. Four syntax-safety layers: `;` guards on both ends (including `}`-terminated expressions and `;\n...\n;` for `//` comments); per-site skipping inside string, nested `${...}` template, comment and regex literals (`i++/2`, `obj.return / 2` and `if (...) /re/` handled accurately); lexical `case`/`default` label shifting past ternary `? :` while ignoring `{default: ...}` object keys; and re-parse validation (`esprima` + local bundled Acorn for modern ES2025/ESM) with per-group fallback
+- `intercept_request` accepts `mock_response.body_file`: validates regular UTF-8 files up to 10 MiB (relative paths resolved against the server working directory), pre-validates `status`/`headers`, mutually exclusive with `body`, re-read per request in a worker thread with suffix-based `content-type` inference
+- `rdp_debugger` accepts `url_pattern` (URL glob such as `**/vm-bundle*.js*`) plus `find` (regex) and `occurrence` (>= 1): single-pass UTF-16 `line`/`column` conversion, automatic `sources()` -> recompute -> reinstall across `reload`/`enable` with immediate cancellation propagation, and `url_pattern` support across `sources` / `source` / `breakable_*` / `remove_breakpoint`
+- Thanks to [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) for contributing these three cross-build capabilities (#28)
+
+See the [Chinese release notes](docs/releases/v1.12.0.md).
+
 ## v1.11.1 (2026-11-15) — Windows Test Skips and Release Workflow Alignment
 
 - Skip the two POSIX Unix-socket path tests in `test_debugger_rdp.py` on Windows CI and add a cross-platform unit test verifying `make_unix_socket_path()` rejects Windows explicitly
