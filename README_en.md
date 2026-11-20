@@ -183,10 +183,9 @@ Put them after the start command. With uvx, put them after `camoufox-reverse-mcp
 
 ## Changelog
 
-- **v1.12.0** (2026-11-19): `instrumentation` gains `inject` for source-level regex insertion (taps opcodes that change per build; insertions inside strings/comments are skipped and reported); `intercept_request` accepts `mock_response.body_file` (inject a 270 KB instrumented script, re-read per request); `rdp_debugger` `set_breakpoint` accepts `url_pattern` + `find` and re-downloads the breakpoint after navigation/reload. [Notes](docs/releases/v1.12.0.md)
+- **v1.12.0** (2026-11-20): `instrumentation` gains `inject` for source-level regex insertion (modern JS validation, literal/template guards and `case` label shifting); `intercept_request` accepts `mock_response.body_file` re-read per request; `rdp_debugger` supports `url_pattern` + `find` pattern breakpoints across reloads. [Notes](docs/releases/v1.12.0.md)
 - **v1.11.1** (2026-11-15): skips the two POSIX Unix-socket path tests on Windows CI and aligns release note validation with the automated release workflow. [Notes](docs/releases/v1.11.1.md)
 - **v1.11.0** (2026-11-15): adds `rdp_debugger` over Firefox's native RDP for real breakpoints, stepping, call stacks, scopes, paused-frame evaluation and pre-request breakpoints; shares `launch_browser` fingerprint/proxy/active-build settings and supports 0700 Unix sockets on macOS/Linux (42 tools in total). [Notes](docs/releases/v1.11.0.md)
-- **v1.10.0** (2026-11-12): instrumentation rewrites member reads only by default, accepts files up to 2 MB, rewrites local source offline and slices logs by seq and state; same-origin iframes log into the top frame; presets run in the page main world; `compare_env` exports an environment bundle; adds `stage_break` and `trace_session`. [Notes](docs/releases/v1.10.0.md)
 
 See [CHANGELOG_en.md](CHANGELOG_en.md) for every version.
 
@@ -194,7 +193,7 @@ See [CHANGELOG_en.md](CHANGELOG_en.md) for every version.
 
 - [@tuntun1337](https://github.com/tuntun1337) — strict JSON Schema compatibility
 - [@Code-xy](https://github.com/Code-xy) — Windows engine-trace diagnosis and validation
-- [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP execution-site requirements and analysis materials, `tap_stage_calls` stage taps for `instrumentation`, `stage_break` and `trace_session`, `rdp_debugger` Firefox RDP debugging, and the #19–#25 reports addressed in v1.10.0
+- [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP execution-site requirements and analysis materials, `tap_stage_calls` stage taps and `inject` regex insertion for `instrumentation`, `stage_break` and `trace_session`, `body_file` mocks for `intercept_request`, `rdp_debugger` Firefox RDP debugging and cross-reload pattern breakpoints, and the #19–#25 reports addressed in v1.10.0
 - [@dsaw1111](https://github.com/dsaw1111) — Camoufox 152 version-gap and PropertyTracer upgrade request
 - [@chung1912](https://github.com/chung1912) — `uvx` install suggestion and `uv tool install` setup
 - [@tunguyen1993](https://github.com/tunguyen1993) — `script_url` escaping report and fix for `hook_jsvmp_interpreter`

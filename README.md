@@ -183,10 +183,9 @@ uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-revers
 
 ## 更新记录
 
-- **v1.12.0**（2026-11-19）：`instrumentation` 新增 `inject` 源码级正则插桩（opcode 换 build 也能打点，命中落在字符串/注释里会跳过并报告）；`intercept_request` 的 `mock_response` 支持 `body_file`（可注入 270KB 改造版脚本，按请求重读）；`rdp_debugger` 的 `set_breakpoint` 支持 `url_pattern` + `find` 正则定位，导航/reload 后自动重算偏移并重下。[详情](docs/releases/v1.12.0.md)
+- **v1.12.0**（2026-11-20）：`instrumentation` 新增 `inject` 源码级正则插桩（跨构建打点，支持现代语法校验、模板/字面量跳过与 `case` 标签偏移）；`intercept_request` 支持 `mock_response.body_file` 按请求重读大体积脚本；`rdp_debugger` 支持 `url_pattern` + `find` 正则断点跨刷新自动重算重下。[详情](docs/releases/v1.12.0.md)
 - **v1.11.1**（2026-11-15）：修复 Windows CI 下两条 POSIX Unix socket 路径测试未跳过的问题，并对齐自动发布流水线校验。[详情](docs/releases/v1.11.1.md)
 - **v1.11.0**（2026-11-15）：新增 `rdp_debugger`，走 Firefox 原生 RDP 补齐真断点、单步、调用栈、作用域、暂停帧求值与请求前断点；与 `launch_browser` 共用指纹/代理/激活版本配置，支持 macOS/Linux 0700 Unix socket，工具扩充为 42 个。[详情](docs/releases/v1.11.0.md)
-- **v1.10.0**（2026-11-12）：插桩默认只改写成员读取、文件上限提到 2MB，能离线改写本地源码，日志能按序号和状态切片；同源 iframe 的事件汇总到顶层日志；preset 改装到页面主世界；`compare_env` 能导出环境包；新增 `stage_break` 和 `trace_session`。[详情](docs/releases/v1.10.0.md)
 
 全部版本见 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -194,7 +193,7 @@ uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-revers
 
 - [@tuntun1337](https://github.com/tuntun1337) — 严格 JSON Schema 兼容性
 - [@Code-xy](https://github.com/Code-xy) — Windows 引擎追踪问题定位与验证
-- [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP 执行点关联需求与分析材料，`instrumentation` 的 `tap_stage_calls` 阶段插桩，`stage_break` 与 `trace_session`，`rdp_debugger` Firefox RDP 断点调试，以及 v1.10.0 处理的 #19–#25 问题报告
+- [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP 执行点关联需求与分析材料，`instrumentation` 的 `tap_stage_calls` 阶段插桩与 `inject` 源码级正则插桩，`stage_break` 与 `trace_session`，`intercept_request` 的 `body_file` 磁盘替换，`rdp_debugger` Firefox RDP 断点调试及跨刷新正则定位，以及 v1.10.0 处理的 #19–#25 问题报告
 - [@dsaw1111](https://github.com/dsaw1111) — Camoufox 152 版本差距与 PropertyTracer 升级需求
 - [@chung1912](https://github.com/chung1912) — `uvx` 安装建议与 `uv tool install` 配置
 - [@tunguyen1993](https://github.com/tunguyen1993) — `hook_jsvmp_interpreter` 的 `script_url` 转义问题与修复建议

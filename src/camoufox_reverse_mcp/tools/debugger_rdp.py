@@ -385,6 +385,8 @@ def _sync_dispatch(action: str, kw: dict) -> dict:
             line=kw["line"], source_actor=kw["source"] or None,
             source_url=kw["source_url"] or None,
             url_substr=kw["url_substr"] or None,
+            url_pattern=kw["url_pattern"] or None,
+            find=kw["find"] or None,
             remove_all=kw["remove_all"])
 
     if action == "wait_paused":
@@ -603,9 +605,9 @@ async def rdp_debugger(
         max_items: sources / breakable_lines 返回条数上限。
         source: source actor（set_breakpoint 用它走 sourceId，可断 eval / new Function）。
         source_url: 精确 URL（set_breakpoint 用它走 sourceUrl，内联脚本/导航后都能挂上）。
-        url_pattern: URL **glob**（如 `**/tdc.js*`），替代 source / source_url。URL 带
-            随机 `js_data`（每次请求都变）的目标只能这样指认；sources / source /
-            breakable_* / set_breakpoint 都接受它。
+        url_pattern: URL **glob**（如 `**/vm-bundle*.js*`），替代 source / source_url。
+            适合 URL 带随机查询参数（每次请求都变）的目标；sources / source /
+            breakable_* / set_breakpoint / remove_breakpoint 都接受它。
         find: 正则，配合 url_pattern：在脚本里定位第 occurrence 个匹配，内部把字符偏移
             换算成 line/column（单行 270KB 压缩脚本 = 1 行 + 一个大列号）。断点记录里
             同时保存 url_pattern/find/occurrence，reload / 导航重建 thread 后自动

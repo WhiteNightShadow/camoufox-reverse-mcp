@@ -163,28 +163,33 @@ async def instrumentation(
             every match of `find` (re.MULTILINE) gets `before` inserted at the
             match start and/or `after` at the match end. `$1..$99`/`$0` in the
             snippets expand to capture groups, `$$` is a literal `$`.
-            Each snippet is wrapped into one complete statement (`;` guard front
-            and back, newline-wrapped when it contains `//`), so insertion at any
-            statement boundary stays valid and keeps the original line numbers.
-            When the original source parses (esprima) and an insertion would make
-            it unparseable — e.g. the regex hit inside a string literal, comment
-            or regex literal — that whole group is skipped and reported under
-            `inject.skipped_groups` (reason "would break syntax"); sources that
-            never parsed skip that check (`validation: "source_unparseable"`) but
-            still get the literal-region guard and the `;` statement guard, and a
-            successful `mode='ast'` parse of the injected text upgrades the result
-            to `validation: "ok (parsed by the mode rewrite)"`.
-            Per-group hit counts come back in `inject.groups[].matches`, in
-            `status`/`log` as `inject_hits`, and are accumulated per URL.
-            The injected code runs in the page main world like every other
-            instrumented script; read the globals it fills with
-            evaluate_js(expression, world="main"). Practical note: a `before`
-            insert at a `switch` label (`case 0x22:`) belongs to the *previous*
-            case body, so use `after` with a pattern that ends past the label
-            when the statement must run for that state.
-        inject_validate: default True — run the parse check described above.
-            False inserts every match unconditionally (only the `;` statement
-            guard applies).
+            Four safety layers keep injected code from breaking syntax:
+            (1) each snippet is wrapped into a complete statement (`;` guard on
+            both ends, or `;\n...\n;` when it contains newlines or `//`);
+            (2) insertions landing inside string, template, comment or regex
+            literals are skipped individually (`skipped_insertions` /
+            `literal_skips`);
+            (3) a `before` insert on a `switch` `case <expr>:` / `default:`
+            label is automatically shifted past that label's colon
+            (`label_shift`), so it executes when jumping to that state and never
+            lands before the first `case`;
+            (4) when the original source parses (esprima or local bundled Acorn
+            for modern ES2025/module syntax), the injected output is re-parsed
+            and any group that would break syntax is rolled back individually
+            (`inject.skipped_groups`, reason `"would break syntax"`).
+            Note: single-line inserts add zero newlines (`lines_added == 0`),
+            though `mode="ast"` prepends the instrumentation runtime header at
+            the top of the file (only `mode="regex"` with zero member rewrites
+            keeps exact 1-based line numbers).
+            Per-group inserted counts come back in `inject.groups[].insertions`
+            (raw regex matches in `.matches`) and accumulate across newly
+            rewritten scripts in `status`/`log` as `inject_hits`.
+            The injected code runs in the page main world; read the globals it
+            fills with `evaluate_js(expression, world="main")`.
+        inject_validate: default True — run the parse validation and per-group
+            fallback described above. False skips the AST re-parse check while
+            keeping the `;` statement wrapper, literal-region skip guard, and
+            `case`/`default` label shift active.
         include_source_site: attach a stable site_id to tap events, plus an
             original-source range map in the log response. Default False.
         max_rewrites: hard cap on rewrites per file; status lists capped files.
@@ -286,6 +291,14 @@ async def instrumentation(
         return {"error": f"unknown action: {action}. Use install/log/stop/reload/status/rewrite_source"}
 
 
+def _inject_zero_reason(inject_report: dict) -> str:
+    if inject_report.get("skipped_groups"):
+        return "inject_would_break_syntax"
+    if inject_report.get("skipped_insertions"):
+        return "inject_literal_only"
+    return "no_inject_matches"
+
+
 def _skip_hint(reason: str, size: int | None = None) -> str | None:
     if reason == "oversized_without_selected_properties":
         return (f"larger than max_file_size: reinstall with max_file_size>={_suggested_size(size or 0)}, "
@@ -298,6 +311,12 @@ def _skip_hint(reason: str, size: int | None = None) -> str | None:
     if reason == "no_inject_matches":
         return ("the inject patterns matched nothing in this file; opcode ids and dispatcher "
                 "shapes are build-bound — re-derive `find` from this build's source")
+    if reason == "inject_literal_only":
+        return ("all regex matches landed inside string/template/comment/regex literals and "
+                "were skipped so non-executable text was not mutated")
+    if reason == "inject_would_break_syntax":
+        return ("inject matched, but inserting the snippet broke JS syntax and was rolled back; "
+                "check `last_inject.skipped_groups` and snippet syntax")
     if reason in ("no_eligible_rewrites", "unsupported_program_syntax"):
         return "nothing to tap with these options (check filters, mode and last_error)"
     return None
@@ -359,6 +378,8 @@ def _route_summary(pattern: str, info: dict | None, options: dict) -> dict:
             "skipped_files": list(stats.get("skipped_files", {}).values()),
             "capped_files": list(stats.get("capped_files", {}).values()),
             "inject_hits": stats.get("inject_hits", {}),
+            "inject_skipped": stats.get("inject_skipped", {}),
+            "inject_literal_skips": stats.get("inject_literal_skips", 0),
         })
     return summary
 
@@ -413,9 +434,12 @@ def _rewrite_text(src: str, *, mode: str, tag: str, rewrite_member_access: bool,
     returned under "inject"; insertion counts as an edit, so a file with only
     regex inserts is still served instead of being passed through.
     """
+    original_src = src
     inject_report = None
     if inject:
-        applied = apply_inject_groups(src, inject, validate=inject_validate)
+        applied = apply_inject_groups(
+            src, inject, validate=inject_validate, max_injections=max_rewrites,
+        )
         inject_report = {key: value for key, value in applied.items() if key != "text"}
         if applied["insertions"]:
             src = applied["text"]
@@ -430,6 +454,30 @@ def _rewrite_text(src: str, *, mode: str, tag: str, rewrite_member_access: bool,
             filter_property_names=prop_filter, filter_object_names=obj_filter,
             include_source_site=include_source_site, tap_stage_calls=tap_stage_calls,
         )
+        if rewritten is None and inject_report and inject_report.get("insertions") and inject_validate:
+            # Oversized files (> VALIDATE_LIMIT) skip pre-validation; verify we did
+            # not break a file that `_ast_rewrite_py` could otherwise parse cleanly.
+            orig_rewritten, orig_stats = _ast_rewrite_py(
+                original_src, tag=tag, rewrite_member_access=rewrite_member_access,
+                rewrite_calls=rewrite_calls, max_edits=max_rewrites,
+                filter_property_names=prop_filter, filter_object_names=obj_filter,
+                include_source_site=include_source_site, tap_stage_calls=tap_stage_calls,
+            )
+            if orig_rewritten is not None or orig_stats.get("parsed"):
+                src = original_src
+                rewritten, rewrite_stats = orig_rewritten, orig_stats
+                inject_report["insertions"] = 0
+                inject_report["validated"] = True
+                inject_report["validation"] = "rolled_back_by_ast_rewriter"
+                inject_report["skipped_groups"] = [
+                    {"group": g["group"], "reason": "would break syntax",
+                     "matches": g.get("matches", 0),
+                     "error": "rolled back because AST rewriter failed on injected source"}
+                    for g in inject_report.get("groups") or [] if g.get("insertions")
+                ]
+                for g in inject_report.get("groups") or []:
+                    if g.get("insertions"):
+                        g.update({"insertions": 0, "skipped": True, "reason": "would break syntax"})
         if rewritten is None:
             error = rewrite_stats.get("error", "AST parse/rewrite failed")
             if fallback_on_error and not (prop_filter or obj_filter):
@@ -455,20 +503,16 @@ def _rewrite_text(src: str, *, mode: str, tag: str, rewrite_member_access: bool,
         error = rewrite_stats.get("error")
     injected = (inject_report or {}).get("insertions", 0)
     if injected and inject_report is not None and not inject_report.get("validated"):
-        # The mode rewriter parses the *injected* text (esprima, then bundled
-        # acorn for modern syntax), so a successful parse is a real validation
-        # of the insertion for files esprima alone cannot read.
         if rewrite_stats.get("parsed"):
             inject_report["validated"] = True
             inject_report["validation"] = "ok (parsed by the mode rewrite)"
     if rewritten is None and injected:
-        # AST failed with no fallback, but the regex inserts are literal text:
-        # serve the injected source instead of dropping the file.
         rewritten = src
         mode_used = f"{mode_used} (inject only)"
     return {"rewritten": rewritten, "stats": rewrite_stats, "mode_used": mode_used,
             "edit_count": (edit_count or 0) + injected, "error": error,
-            "capped": bool(rewrite_stats.get("edits_capped") or rewrite_stats.get("stage_capped")),
+            "capped": bool(rewrite_stats.get("edits_capped") or rewrite_stats.get("stage_capped")
+                           or (inject_report or {}).get("capped")),
             "inject": inject_report}
 
 
@@ -542,7 +586,7 @@ def _rewrite_source(*, source, source_path, output_path, mode, tag, rewrite_memb
                       or "no_eligible_rewrites")
             inject_report = outcome.get("inject") or {}
             if inject_report.get("groups") and not inject_report.get("insertions"):
-                reason = "no_inject_matches"
+                reason = _inject_zero_reason(inject_report)
             result["reason"] = reason
             return result
 
@@ -718,9 +762,7 @@ async def _install(url_pattern, mode, tag, rewrite_member_access,
                     reason = rewrite_stats.get("skipped_reason") or "no_eligible_rewrites"
                     inject_report = outcome.get("inject") or {}
                     if inject_report.get("groups") and not inject_report.get("insertions"):
-                        # The regex hit nothing in this build: say so instead of
-                        # reporting a generic "no eligible rewrites".
-                        reason = "no_inject_matches"
+                        reason = _inject_zero_reason(inject_report)
                     _record_skip(stats, req_url, len(body_bytes), reason,
                                  **({"error": outcome["error"]} if outcome["error"] else {}))
                     await route.fulfill(status=resp.status, headers=headers, body=body_bytes)

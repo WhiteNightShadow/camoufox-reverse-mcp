@@ -52,7 +52,7 @@
 | `list_network_requests` | List captured requests (filter by URL / domain / method / type / status) |
 | `get_network_request` | Get full request details (`max_body_size` controls body truncation) |
 | `get_request_initiator` | Get JS call stack that initiated a request |
-| `intercept_request` | Intercept requests: log / block / modify / mock / stop. `mock_response` takes `body` (inline text) or `body_file` (on-disk file, read as UTF-8, relative paths resolve against the server working directory, re-read per request; the two are mutually exclusive) — use the file for large scripts |
+| `intercept_request` | Intercept requests: log / block / modify / mock / stop. `mock_response` takes `body` (inline text) or `body_file` (regular UTF-8 file <= 10 MiB, relative paths resolve against the server working directory, re-read per request in a worker thread; mutually exclusive — fulfilled responses are readable by page scripts, so never point `body_file` at credentials or private local files) |
 | `export_network_capture` | Export a versioned JSON snapshot; masks header and query values and omits bodies by default, never overwrites a file |
 | `compare_network_requests` | Compare 2 to 10 captured requests without sending requests or launching a browser |
 | `save_response_body` | Save captured response bytes (JS / WASM / JSON / binary) without refetching, never overwrites a file |
@@ -113,8 +113,8 @@ off by default. It does not guess a VM PC, opcode, or pre-protection source loca
 ```text
 instrumentation(
   action="install",
-  url_pattern="**/tdc.js*",
-  tag="tdcx",
+  url_pattern="**/vm-bundle*.js*",
+  tag="vm",
   inject=[{
     "find": r"case (0x[0-9a-f]+):(_0x[0-9a-f]+)\[(_0x[0-9a-f]+)\[\+\+(_0x[0-9a-f]+)\]\]\[\2\[",
     "before": "try{(window.__hit=window.__hit||[]).push([$1,$4]);}catch(e){}",
@@ -123,15 +123,15 @@ instrumentation(
 )
 ```
 
-- `find` is a Python regex (`re.MULTILINE`) and **every** match in the file is inserted; `$1..$99`/`$0` expand capture groups, `$$` is a literal `$`
+- `find` is a Python regex (`re.MULTILINE`) and **every** match in the file is inserted (bounded by `max_rewrites`); `$1..$99`/`$0` expand capture groups, `$$` is a literal `$`
 - `before` inserts at the match start, `after` at the match end; both may be given
-- Hit counts: `inject.groups[].matches` in the return value, `status.inject_hits` (accumulated per URL) and `log`; a file with zero hits is listed in `skipped_files` with `reason: "no_inject_matches"`
+- Hit & skip counts: `inject.groups[].insertions` (raw matches in `.matches`), `status`/`log` `inject_hits` (accumulated per group across newly rewritten scripts), `inject_skipped` and `inject_literal_skips`; a file with zero insertions is listed in `skipped_files` as `no_inject_matches`, `inject_literal_only` or `inject_would_break_syntax`
 - Syntax-safety policy (in priority order):
-  1. every snippet is wrapped into one complete statement (`;` guard front and back) so any statement boundary is a valid insertion point; a single-line snippet keeps the original line numbers (breakpoints stay usable) and a snippet containing `//` is newline-wrapped
-  2. an insertion that lands inside a string / template / comment / regex literal is **skipped** and counted in `inject_literal_skips` and `inject.groups[].literal_skips` (such code would never execute even if it parsed)
-  3. a `before` insert at a `case <expr>:` / `default:` label moves after the label colon (`label_shift`): a switch CaseBlock only allows case/default clauses, so a statement before the first label is a syntax error and one before a later label belongs to the previous clause (it would not run when jumping straight into that case)
-  4. when the original source parses, the result is parsed again; a group that still breaks it is dropped whole with `skipped_groups[].reason: "would break syntax"` (a parseable file is never left broken); a source that never parsed reports `validation: "source_unparseable"` and only rules 1/2 apply, but `mode='ast'` re-parses the injected text with the bundled Acorn and upgrades the result to `validation: "ok (parsed by the mode rewrite)"`, so `inject.validation` is the final verdict
-- Insertion runs **before** the mode rewrite, so `find` always matches the original script and its offsets are not shifted by ast/regex edits; inserted statements may themselves be tapped afterwards (extra log entries only, results unchanged). `inject_validate=False` disables rule 4, rules 1/2 stay active
+  1. every snippet is wrapped into a complete statement (`;` guard on both ends, including snippets ending with `}`, or `;\n...\n;` when newlines/`//` are present); single-line snippets add zero newlines (`lines_added == 0`; note that `mode="ast"` prepends the instrumentation runtime header, so only `mode="regex"` with zero member rewrites preserves original 1-based line numbers)
+  2. insertions landing inside string, template (tracking nested `${...}`), comment or regex literals (distinguishing `i++/2`, `obj.return / 2` and `if (...) /re/`) are **skipped** individually and counted in `inject_literal_skips`
+  3. a `before` insert on a `switch` `case <expr>:` / `default:` label lexically skips literals, brackets and ternary `? :` operators to move past the label colon (`label_shift`), while ignoring object properties such as `{default: ...}`
+  4. when the original source parses (`esprima` first, falling back to local bundled Acorn for modern ES2025/module syntax), the injected output is re-parsed and any group that would break syntax is rolled back individually (`skipped_groups[].reason: "would break syntax"`)
+- Insertion runs **before** the mode rewrite, so `find` always matches the original script; `inject_validate=False` skips only rule 4 while keeping rules 1/2/3 active
 - Injected code runs in the page main world like every other instrumented script; read the globals it fills with `evaluate_js("window.__hit || []", world="main")`
 - To preview offline and then serve it back: `instrumentation(action="rewrite_source", source_path=..., output_path=..., inject=[...])`, then `intercept_request(action="mock", url_pattern=..., mock_response={"body_file": output_path})`
 
@@ -255,8 +255,8 @@ trace_property_access(action="stop", mode="summary")
 | source | Fetch full script source; longString chunks advance by UTF-16 code units and `truncated` is explicit past `max_chars` |
 | breakable_lines | Breakable line numbers of a script |
 | breakable_positions | Breakable positions of a script (or one line): `columns_0based` / `columns_1based` |
-| set_breakpoint | Set a breakpoint: `url_pattern` + `find` locate it by URL glob and regex (`occurrence` picks the match; the offset is converted to `line/column`, which is what you want when the URL carries random `js_data`), `source_url` uses `sourceUrl` (inline scripts and post-navigation sources get it automatically), `source` uses `sourceId` (eval / `new Function`); `column` is 1-based and snaps to the nearest breakable column; a line without breakable positions returns `installed: false` |
-| remove_breakpoint | Remove line breakpoints using the exact location they were set with; pass `line`/`source`/`source_url`/`url_substr`, or `remove_all=true` to clear everything |
+| set_breakpoint | Set a breakpoint: `url_pattern` + `find` locate it by URL glob and regex (`occurrence` >= 1 picks the match; the offset is converted to `line/column`, suited for URLs carrying dynamic query tokens), `source_url` uses `sourceUrl` (inline scripts and post-navigation sources get it automatically), `source` uses `sourceId` (eval / `new Function`); `column` is 1-based and snaps to the nearest breakable column; a line without breakable positions returns `installed: false` |
+| remove_breakpoint | Remove line breakpoints using the exact location they were set with; pass `line`/`source`/`source_url`/`url_substr`/`url_pattern`/`find`, or `remove_all=true` to clear everything |
 | wait_paused | Wait for the next pause; only accepts a `paused` that arrived after `resume`/`step`/`interrupt`; returns frame / where / why |
 | frames | Full call stack of the current pause; returns `{"error": "wrongState"}` when not paused |
 | scopes | Recursive scope chain and bindings of one frame; requires `frame_actor` |
@@ -289,12 +289,12 @@ Coordinates and verified gotchas:
   bound to one source actor that disappears on navigation; `reload` reports those in
   `reapply_skipped` — use `url_pattern` + `find` (or `source_url`) for anything that must survive a
 reload.
-- Minimal usage (one pattern for URLs carrying `js_data` and for opcode ids that change per build):
+- Minimal usage (one pattern for URLs carrying dynamic tokens/hashes and for opcode ids that change per build):
 
   ```text
   rdp_debugger(
     action="set_breakpoint",
-    url_pattern="**/tdc.js*",
+    url_pattern="**/vm-bundle*.js*",
     find=r"case (0x[0-9a-f]+):(_0x[0-9a-f]+)\[",
     occurrence=1,
     condition="p === 0x22"
@@ -303,8 +303,8 @@ reload.
   rdp_debugger(action="reload", wait_page=8)
   ```
 
-- **Targets whose URL changes on every request (`js_data`, `?t=timestamps`) need `url_pattern` +
-  `find`**: 11 captures of one site can yield 10 different sha256 values, so neither the exact URL nor
+- **Targets whose URL changes on every request (`?v=hash`, `?t=timestamp`) need `url_pattern` +
+  `find`**: when every request serves a distinct bundle hash, neither the exact URL nor
   the source actor survives a reload. The record keeps the glob, regex and `occurrence`, so `reload`
   and an `enable` that rebuilds the thread re-run `sources()` -> find the new actor -> recompute the
   offset -> re-download. When the regex no longer matches in the new build, `reapply_failed` reports

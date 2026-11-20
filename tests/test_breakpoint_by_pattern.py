@@ -1,4 +1,4 @@
-"""P0-3 断点跨 build：`url_pattern` + `find` 正则定位 + 导航/reload 后自动重下。
+"""断点跨构建定位：`url_pattern` + `find` 正则定位 + 导航/reload 后自动重下。
 
 覆盖：
   * 纯逻辑：URL glob、字符偏移 → (line, column)（含单行 200KB 与代理对）、第 N 个匹配
@@ -25,21 +25,21 @@ from camoufox_reverse_mcp.tools import debugger_rdp as tool
 from camoufox_reverse_mcp.tools.debugger_rdp import rdp_debugger
 
 FIND = r"case (0x[0-9a-f]+):(_0x[0-9a-f]+)\["
-TD_BODY = "case 0x22:_0xa[_0xb[++_0xc]];break;\ncase 0x4b:_0xa[_0xb[++_0xd]];break;\n"
+VM_BODY = "case 0x22:_0xa[_0xb[++_0xc]];break;\ncase 0x4b:_0xa[_0xb[++_0xd]];break;\n"
 
 
 # ---------------------------------------------------------------- 纯逻辑
 
 
-def test_glob_match_understands_doublestar_and_js_data_suffix():
-    url = "https://example.test/assets/tdc.js?js_data=abc123"
-    assert glob_match("**/tdc.js*", url)
-    assert glob_match("**/tdc.js?js_data=*", url)
+def test_glob_match_understands_doublestar_and_v_token_suffix():
+    url = "https://example.test/assets/vm-bundle.js?v_token=abc123"
+    assert glob_match("**/vm-bundle.js*", url)
+    assert glob_match("**/vm-bundle.js?v_token=*", url)
     assert glob_match("**/*.js*", url)
-    assert not glob_match("**/tdc.js", url)          # 没有尾随 * → 不匹配 query
+    assert not glob_match("**/vm-bundle.js", url)          # 没有尾随 * → 不匹配 query
     assert not glob_match("**/other.js*", url)
     assert not glob_match("*.js*", url)              # 单 * 不跨 /
-    assert not glob_match("**/tdc.js*", "")          # eval / new Function 没有 URL
+    assert not glob_match("**/vm-bundle.js*", "")          # eval / new Function 没有 URL
     assert not glob_match("", url)
 
 
@@ -56,7 +56,7 @@ def test_offset_to_line_column_counts_utf16_units_and_maps_lines():
 
 def test_offset_to_line_column_on_a_200kb_single_line_script():
     prefix = ("var _0x1=1;" * 20000)[:200_000]
-    text = prefix + TD_BODY.replace("\n", "")
+    text = prefix + VM_BODY.replace("\n", "")
     offset = text.index("case 0x4b:")
     assert "\n" not in text[:offset]
     assert offset_to_line_column(text, offset) == (1, offset)
@@ -64,17 +64,17 @@ def test_offset_to_line_column_on_a_200kb_single_line_script():
 
 
 def test_find_match_reports_occurrence_offset_and_groups():
-    first = find_match(TD_BODY, FIND, 1)
-    second = find_match(TD_BODY, FIND, 2)
+    first = find_match(VM_BODY, FIND, 1)
+    second = find_match(VM_BODY, FIND, 2)
     assert first["line"] == 1 and first["column_0based"] == 0
     assert first["groups"] == ["0x22", "_0xa"]
     assert first["match"] == "case 0x22:_0xa["
     assert second["line"] == 2 and second["column_0based"] == 0
     assert second["groups"] == ["0x4b", "_0xa"]
-    assert find_match(TD_BODY, FIND, 3) is None
-    assert count_matches(TD_BODY, FIND) == 2
+    assert find_match(VM_BODY, FIND, 3) is None
+    assert count_matches(VM_BODY, FIND) == 2
     with pytest.raises(RdpError):
-        find_match(TD_BODY, "case (", 1)
+        find_match(VM_BODY, "case (", 1)
 
 
 def test_find_match_on_a_minified_line_reports_a_big_column():
@@ -186,40 +186,40 @@ def _clean_tool_state():
 def test_set_breakpoint_by_url_pattern_and_find():
     dbg = FireFoxDebugger(port=1)
     fake = FakeRdp()
-    fake.sources_list = [{"actor": "s1", "url": "https://cdn.test/tdc.js?js_data=aaa",
+    fake.sources_list = [{"actor": "s1", "url": "https://cdn.test/vm-bundle.js?v_token=aaa",
                           "sourceStartLine": 1}]
-    fake.texts = {"s1": TD_BODY}
-    fake.columns = {"s1": _positions_for(TD_BODY)}
+    fake.texts = {"s1": VM_BODY}
+    fake.columns = {"s1": _positions_for(VM_BODY)}
     dbg = _dbg(fake)
 
-    out = dbg.set_breakpoint(url_pattern="**/tdc.js*", find=FIND, occurrence=2)
+    out = dbg.set_breakpoint(url_pattern="**/vm-bundle.js*", find=FIND, occurrence=2)
     assert out["installed"] is True
     request = fake.sent("setBreakpoint")[0]
-    assert request["location"] == {"sourceUrl": "https://cdn.test/tdc.js?js_data=aaa",
+    assert request["location"] == {"sourceUrl": "https://cdn.test/vm-bundle.js?v_token=aaa",
                                    "line": 2, "column": 0}
     assert out["find"]["occurrence"] == 2
     assert out["find"]["match"] == "case 0x4b:_0xa["
     assert out["find"]["groups"] == ["0x4b", "_0xa"]
-    assert out["find"]["source_url"] == "https://cdn.test/tdc.js?js_data=aaa"
+    assert out["find"]["source_url"] == "https://cdn.test/vm-bundle.js?v_token=aaa"
     assert "url_pattern + find" in out["reload_hint"]
     record = dbg.breakpoints[0]
     assert record["locator"]["find"] == FIND
     assert record["locator"]["occurrence"] == 2
-    assert record["locator"]["url_pattern"] == "**/tdc.js*"
+    assert record["locator"]["url_pattern"] == "**/vm-bundle.js*"
     assert dbg.status()["breakpoints"][0]["locator"]["occurrence"] == 2
 
 
 def test_set_breakpoint_by_find_on_a_single_line_script():
     """单行 200KB：列号就是字符偏移，行号恒为 1。"""
-    text = ("var _0x1=1;" * 16000)[:200_000] + TD_BODY.replace("\n", "")
+    text = ("var _0x1=1;" * 16000)[:200_000] + VM_BODY.replace("\n", "")
     expected = text.index("case 0x4b:")
     fake = FakeRdp()
-    fake.sources_list = [{"actor": "s1", "url": "https://cdn.test/tdc.js", "sourceStartLine": 1}]
+    fake.sources_list = [{"actor": "s1", "url": "https://cdn.test/vm-bundle.js", "sourceStartLine": 1}]
     fake.texts = {"s1": text}
     fake.columns = {"s1": {1: [expected, expected + 4]}}
     dbg = _dbg(fake)
 
-    out = dbg.set_breakpoint(url_pattern="**/tdc.js*", find=r"case 0x4b:", occurrence=1)
+    out = dbg.set_breakpoint(url_pattern="**/vm-bundle.js*", find=r"case 0x4b:", occurrence=1)
     assert out["location"]["line"] == 1
     assert out["location"]["column_0based"] == expected
     assert fake.sent("setBreakpoint")[0]["location"]["column"] == expected
@@ -227,22 +227,22 @@ def test_set_breakpoint_by_find_on_a_single_line_script():
 
 def test_set_breakpoint_snaps_to_the_nearest_breakable_column():
     fake = FakeRdp()
-    fake.sources_list = [{"actor": "s1", "url": "https://cdn.test/tdc.js", "sourceStartLine": 1}]
-    fake.texts = {"s1": TD_BODY}
+    fake.sources_list = [{"actor": "s1", "url": "https://cdn.test/vm-bundle.js", "sourceStartLine": 1}]
+    fake.texts = {"s1": VM_BODY}
     fake.columns = {"s1": {1: [0, 40]}}  # 命中列 13 不在表里 → 吸到最近的 0
     dbg = _dbg(fake)
-    out = dbg.set_breakpoint(url_pattern="**/tdc.js*", find=FIND, occurrence=1)
+    out = dbg.set_breakpoint(url_pattern="**/vm-bundle.js*", find=FIND, occurrence=1)
     assert out["location"]["column_0based"] == 0
     assert fake.sent("setBreakpoint")[0]["location"]["column"] == 0
 
 
 def test_find_that_matches_nothing_raises_a_clear_error():
     fake = FakeRdp()
-    fake.sources_list = [{"actor": "s1", "url": "https://cdn.test/tdc.js", "sourceStartLine": 1}]
-    fake.texts = {"s1": TD_BODY}
+    fake.sources_list = [{"actor": "s1", "url": "https://cdn.test/vm-bundle.js", "sourceStartLine": 1}]
+    fake.texts = {"s1": VM_BODY}
     dbg = _dbg(fake)
     with pytest.raises(RdpError) as excinfo:
-        dbg.set_breakpoint(url_pattern="**/tdc.js*", find=r"case 0xff:", occurrence=1)
+        dbg.set_breakpoint(url_pattern="**/vm-bundle.js*", find=r"case 0xff:", occurrence=1)
     assert "第 1 个匹配" in str(excinfo.value)
     assert fake.sent("setBreakpoint") == []
 
@@ -253,21 +253,21 @@ def test_url_pattern_that_matches_nothing_lists_known_urls():
                           "sourceStartLine": 1}]
     dbg = _dbg(fake)
     with pytest.raises(RdpError) as excinfo:
-        dbg.set_breakpoint(url_pattern="**/tdc.js*", find=FIND)
+        dbg.set_breakpoint(url_pattern="**/vm-bundle.js*", find=FIND)
     assert "已知 URL" in str(excinfo.value)
 
 
 def test_explicit_line_and_source_url_still_work():
     fake = FakeRdp()
-    fake.sources_list = [{"actor": "s1", "url": "https://cdn.test/tdc.js",
+    fake.sources_list = [{"actor": "s1", "url": "https://cdn.test/vm-bundle.js",
                           "sourceStartLine": 1}]
-    fake.texts = {"s1": TD_BODY}
+    fake.texts = {"s1": VM_BODY}
     fake.columns = {"s1": {2: [0, 7]}}
     dbg = _dbg(fake)
-    out = dbg.set_breakpoint(2, source_url="https://cdn.test/tdc.js")
+    out = dbg.set_breakpoint(2, source_url="https://cdn.test/vm-bundle.js")
     assert out["installed"] is True
     assert fake.sent("setBreakpoint")[0]["location"] == {
-        "sourceUrl": "https://cdn.test/tdc.js", "line": 2, "column": 0}
+        "sourceUrl": "https://cdn.test/vm-bundle.js", "line": 2, "column": 0}
     assert "locator" not in dbg.breakpoints[0]
 
 
@@ -275,18 +275,18 @@ def test_explicit_line_and_source_url_still_work():
 
 
 def test_reload_recomputes_the_offset_and_redownloads_the_breakpoint():
-    """URL 换了（js_data 变）、脚本前面多了一段（偏移整体后移）→ 仍要命中同一处代码。"""
+    """URL 换了（v_token 变）、脚本前面多了一段（偏移整体后移）→ 仍要命中同一处代码。"""
     fake = FakeRdp()
-    fake.sources_list = [{"actor": "old", "url": "https://cdn.test/tdc.js?js_data=aaa",
+    fake.sources_list = [{"actor": "old", "url": "https://cdn.test/vm-bundle.js?v_token=aaa",
                           "sourceStartLine": 1}]
-    fake.texts = {"old": TD_BODY}
+    fake.texts = {"old": VM_BODY}
     fake.columns = {"old": {1: [0, 13], 2: [0]}}
     dbg = _dbg(fake)
-    dbg.set_breakpoint(url_pattern="**/tdc.js*", find=FIND, occurrence=1)
+    dbg.set_breakpoint(url_pattern="**/vm-bundle.js*", find=FIND, occurrence=1)
     assert fake.sent("setBreakpoint")[0]["location"]["line"] == 1
 
-    shifted = "var pad = 1;\n" + TD_BODY
-    fake.sources_list = [{"actor": "new", "url": "https://cdn.test/tdc.js?js_data=bbb",
+    shifted = "var pad = 1;\n" + VM_BODY
+    fake.sources_list = [{"actor": "new", "url": "https://cdn.test/vm-bundle.js?v_token=bbb",
                           "sourceStartLine": 1}]
     fake.texts = {"new": shifted}
     fake.columns = {"new": {2: [0, 26], 3: [0]}}
@@ -295,7 +295,7 @@ def test_reload_recomputes_the_offset_and_redownloads_the_breakpoint():
     assert info["thread"] == "thread2"
     assert "reapply_failed" not in info
     [location] = info["reapplied"]
-    assert location["sourceUrl"] == "https://cdn.test/tdc.js?js_data=bbb"
+    assert location["sourceUrl"] == "https://cdn.test/vm-bundle.js?v_token=bbb"
     assert location["line"] == 2
     last = fake.sent("setBreakpoint")[-1]
     assert last["location"] == location
@@ -306,14 +306,14 @@ def test_reload_recomputes_the_offset_and_redownloads_the_breakpoint():
 
 def test_reload_reports_regex_not_found_in_the_new_build():
     fake = FakeRdp()
-    fake.sources_list = [{"actor": "old", "url": "https://cdn.test/tdc.js?js_data=aaa",
+    fake.sources_list = [{"actor": "old", "url": "https://cdn.test/vm-bundle.js?v_token=aaa",
                           "sourceStartLine": 1}]
-    fake.texts = {"old": TD_BODY}
+    fake.texts = {"old": VM_BODY}
     fake.columns = {"old": {1: [0, 13], 2: [0]}}
     dbg = _dbg(fake)
-    dbg.set_breakpoint(url_pattern="**/tdc.js*", find=FIND, occurrence=1)
+    dbg.set_breakpoint(url_pattern="**/vm-bundle.js*", find=FIND, occurrence=1)
 
-    fake.sources_list = [{"actor": "new", "url": "https://cdn.test/tdc.js?js_data=ccc",
+    fake.sources_list = [{"actor": "new", "url": "https://cdn.test/vm-bundle.js?v_token=ccc",
                           "sourceStartLine": 1}]
     fake.texts = {"new": "case 0x99:_0xzz[_0xy[++_0xz]];break;\n"}  # 换 build：opcode 全变
     fake.columns = {"new": {1: [0]}}
@@ -323,19 +323,19 @@ def test_reload_reports_regex_not_found_in_the_new_build():
     [failure] = info["reapply_failed"]
     assert failure["reason"] == "regex not found"
     assert failure["pattern"] == FIND
-    assert failure["url_pattern"] == "**/tdc.js*"
+    assert failure["url_pattern"] == "**/vm-bundle.js*"
     assert failure["searched"][0]["matches"] == 0
-    assert failure["searched"][0]["url"].endswith("js_data=ccc")
+    assert failure["searched"][0]["url"].endswith("v_token=ccc")
 
 
 def test_reload_reports_a_missing_source():
     fake = FakeRdp()
-    fake.sources_list = [{"actor": "old", "url": "https://cdn.test/tdc.js?js_data=aaa",
+    fake.sources_list = [{"actor": "old", "url": "https://cdn.test/vm-bundle.js?v_token=aaa",
                           "sourceStartLine": 1}]
-    fake.texts = {"old": TD_BODY}
+    fake.texts = {"old": VM_BODY}
     fake.columns = {"old": {1: [0, 13], 2: [0]}}
     dbg = _dbg(fake)
-    dbg.set_breakpoint(url_pattern="**/tdc.js*", find=FIND, occurrence=1)
+    dbg.set_breakpoint(url_pattern="**/vm-bundle.js*", find=FIND, occurrence=1)
 
     fake.sources_list = [{"actor": "new", "url": "https://cdn.test/other.js",
                           "sourceStartLine": 1}]
@@ -364,18 +364,18 @@ def test_reload_still_handles_plain_locations_and_source_id_skips():
 
 def test_enable_reapplies_when_the_thread_is_rebuilt():
     fake = FakeRdp()
-    fake.sources_list = [{"actor": "s1", "url": "https://cdn.test/tdc.js?js_data=aaa",
+    fake.sources_list = [{"actor": "s1", "url": "https://cdn.test/vm-bundle.js?v_token=aaa",
                           "sourceStartLine": 1}]
-    fake.texts = {"s1": TD_BODY}
+    fake.texts = {"s1": VM_BODY}
     fake.columns = {"s1": {1: [0, 13], 2: [0]}}
     fake.route_tabs = [{"actor": "tab1", "url": "https://cdn.test/"}]
     dbg = _dbg(fake)
-    dbg.set_breakpoint(url_pattern="**/tdc.js*", find=FIND, occurrence=1)
+    dbg.set_breakpoint(url_pattern="**/vm-bundle.js*", find=FIND, occurrence=1)
 
     before = len(fake.sent("setBreakpoint"))
-    fake.sources_list = [{"actor": "s1b", "url": "https://cdn.test/tdc.js?js_data=bbb",
+    fake.sources_list = [{"actor": "s1b", "url": "https://cdn.test/vm-bundle.js?v_token=bbb",
                           "sourceStartLine": 1}]
-    fake.texts = {"s1b": "var pad = 1;\n" + TD_BODY}
+    fake.texts = {"s1b": "var pad = 1;\n" + VM_BODY}
     fake.columns = {"s1b": {2: [0, 26]}}
 
     def call(obj, timeout=20.0, aliases=()):
@@ -388,7 +388,7 @@ def test_enable_reapplies_when_the_thread_is_rebuilt():
     info = dbg.enable("cdn.test")
     assert info["thread"] == "thread2"
     assert len(fake.sent("setBreakpoint")) == before + 1
-    assert info["reapplied"][0]["sourceUrl"] == "https://cdn.test/tdc.js?js_data=bbb"
+    assert info["reapplied"][0]["sourceUrl"] == "https://cdn.test/vm-bundle.js?v_token=bbb"
     assert info["reapplied"][0]["line"] == 2
 
 
@@ -397,14 +397,14 @@ def test_enable_reapplies_when_the_thread_is_rebuilt():
 
 async def test_tool_set_breakpoint_with_url_pattern_and_find():
     fake = FakeRdp()
-    fake.sources_list = [{"actor": "s1", "url": "https://cdn.test/tdc.js?js_data=aaa",
+    fake.sources_list = [{"actor": "s1", "url": "https://cdn.test/vm-bundle.js?v_token=aaa",
                           "sourceStartLine": 1}]
-    fake.texts = {"s1": TD_BODY}
+    fake.texts = {"s1": VM_BODY}
     fake.columns = {"s1": {1: [0, 13], 2: [0]}}
     dbg = _dbg(fake)
     tool._STATE["dbg"] = dbg
 
-    out = await rdp_debugger(action="set_breakpoint", url_pattern="**/tdc.js*",
+    out = await rdp_debugger(action="set_breakpoint", url_pattern="**/vm-bundle.js*",
                              find=r"case (0x[0-9a-f]+):", occurrence=2,
                              condition="p === 1")
     assert out["installed"] is True
@@ -417,7 +417,7 @@ async def test_tool_set_breakpoint_requires_line_or_find():
     dbg = _dbg(fake)
     tool._STATE["dbg"] = dbg
     with pytest.raises(RdpError) as excinfo:
-        await rdp_debugger(action="set_breakpoint", url_pattern="**/tdc.js*")
+        await rdp_debugger(action="set_breakpoint", url_pattern="**/vm-bundle.js*")
     assert "line" in str(excinfo.value)
     assert "find" in str(excinfo.value)
     assert fake.sent("setBreakpoint") == []
@@ -425,17 +425,74 @@ async def test_tool_set_breakpoint_requires_line_or_find():
 
 async def test_tool_sources_and_breakable_positions_accept_url_pattern():
     fake = FakeRdp()
-    fake.sources_list = [{"actor": "s1", "url": "https://cdn.test/tdc.js?js_data=aaa",
+    fake.sources_list = [{"actor": "s1", "url": "https://cdn.test/vm-bundle.js?v_token=aaa",
                           "sourceStartLine": 1},
                          {"actor": "s2", "url": "https://cdn.test/other.js",
                           "sourceStartLine": 1}]
-    fake.texts = {"s1": TD_BODY, "s2": ""}
+    fake.texts = {"s1": VM_BODY, "s2": ""}
     fake.columns = {"s1": {1: [0, 13]}}
     dbg = _dbg(fake)
     tool._STATE["dbg"] = dbg
 
-    sources = await rdp_debugger(action="sources", url_pattern="**/tdc.js*")
+    sources = await rdp_debugger(action="sources", url_pattern="**/vm-bundle.js*")
     assert [s["actor"] for s in sources["sources"]] == ["s1"]
-    positions = await rdp_debugger(action="breakable_positions", url_pattern="**/tdc.js*",
+    positions = await rdp_debugger(action="breakable_positions", url_pattern="**/vm-bundle.js*",
                                    line=1)
     assert positions["positions"]["1"]["columns_0based"] == [0, 13]
+
+
+async def test_remove_breakpoint_supports_url_pattern_and_find_and_occurrence_validation():
+    fake = FakeRdp()
+    fake.sources_list = [{"actor": "s1", "url": "https://cdn.test/vm-bundle.js?v=aaa",
+                          "sourceStartLine": 1}]
+    fake.texts = {"s1": VM_BODY}
+    fake.columns = {"s1": {1: [0, 13], 2: [0]}}
+    dbg = _dbg(fake)
+    tool._STATE["dbg"] = dbg
+
+    with pytest.raises(RdpError, match="occurrence"):
+        await rdp_debugger(action="set_breakpoint", url_pattern="**/vm-bundle.js*",
+                           find=r"case (0x[0-9a-f]+):", occurrence=0)
+
+    installed = await rdp_debugger(action="set_breakpoint", url_pattern="**/vm-bundle.js*",
+                                   find=r"case (0x[0-9a-f]+):", occurrence=1)
+    assert installed["installed"] is True
+
+    removed = await rdp_debugger(action="remove_breakpoint", url_pattern="**/vm-bundle.js*")
+    assert removed["removed"] == 1
+    assert dbg.breakpoints == []
+
+
+def test_cancel_during_reapply_locator_propagates_immediately_without_scanning_remaining_sources():
+    fake = FakeRdp()
+    fake.sources_list = [
+        {"actor": f"s{i}", "url": f"https://cdn.test/vm-{i}.js?v={i}", "sourceStartLine": 1}
+        for i in range(6)
+    ]
+    fake.texts = {f"s{i}": "var x = 1;\n" for i in range(6)}
+    dbg = _dbg(fake)
+    dbg.breakpoints.append({
+        "location": {"sourceUrl": "https://cdn.test/vm-0.js?v=old", "line": 1, "column": 0},
+        "options": {"condition": None, "logValue": None, "showStacktrace": None},
+        "source_actor": None,
+        "source_url": "https://cdn.test/vm-0.js?v=old",
+        "line": 1,
+        "column_0based": 0,
+        "locator": {"find": r"case 0x99:", "occurrence": 1, "url_pattern": "**/vm-*.js*"},
+    })
+
+    pulled: list[str] = []
+    orig_source_text = dbg.source_text
+
+    def cancelling_source_text(actor, *args, **kwargs):
+        pulled.append(actor)
+        if actor == "s0":
+            dbg.request_cancel("user cancelled reload")
+        return orig_source_text(actor, *args, **kwargs)
+
+    dbg.source_text = cancelling_source_text
+    with pytest.raises(RdpError, match="cancel"):
+        dbg._reapply_breakpoints()
+    # s0 触发取消后绝不能吞掉异常继续拉 s1..s5，且 _cancel 保持置位直到下一次新操作入口
+    assert pulled == ["s0"], pulled
+    assert dbg._cancel.is_set() is True

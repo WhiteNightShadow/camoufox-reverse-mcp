@@ -52,7 +52,7 @@
 | `list_network_requests` | 列出已捕获的请求（支持 URL / 域名 / 方法 / 类型 / 状态码过滤） |
 | `get_network_request` | 获取请求完整详情（`max_body_size` 控制 body 截断） |
 | `get_request_initiator` | 获取请求发起的 JS 调用栈 |
-| `intercept_request` | 拦截请求：log / block / modify / mock / stop。`mock_response` 支持 `body`（内联文本）或 `body_file`（磁盘文件，UTF-8、相对路径按服务器工作目录解析、每次请求重读，两者互斥），大脚本用后者 |
+| `intercept_request` | 拦截请求：log / block / modify / mock / stop。`mock_response` 支持 `body`（内联文本）或 `body_file`（≤10 MiB 的常规 UTF-8 文件，相对路径按服务器工作目录解析、每次请求在工作线程重读，两者互斥；注意响应内容对页面脚本可读，勿指向本地敏感凭据文件） |
 | `export_network_capture` | 导出带版本号的 JSON 快照；默认掩码请求头和查询参数、不含 body，不覆盖已有文件 |
 | `compare_network_requests` | 对比 2 到 10 个已捕获的请求，不发请求，也不需要启动浏览器 |
 | `save_response_body` | 保存已捕获的响应字节（JS / WASM / JSON / 二进制），不重新请求，不覆盖已有文件 |
@@ -103,8 +103,8 @@
 ```text
 instrumentation(
   action="install",
-  url_pattern="**/tdc.js*",
-  tag="tdcx",
+  url_pattern="**/vm-bundle*.js*",
+  tag="vm",
   inject=[{
     "find": r"case (0x[0-9a-f]+):(_0x[0-9a-f]+)\[(_0x[0-9a-f]+)\[\+\+(_0x[0-9a-f]+)\]\]\[\2\[",
     "before": "try{(window.__hit=window.__hit||[]).push([$1,$4]);}catch(e){}",
@@ -113,15 +113,15 @@ instrumentation(
 )
 ```
 
-- `find` 是 Python 正则（`re.MULTILINE`），同一脚本内**全部匹配**都插；`$1..$99`/`$0` 引用捕获组，`$$` 是字面 `$`
+- `find` 是 Python 正则（`re.MULTILINE`），同一脚本内**全部匹配**都插（受 `max_rewrites` 上限保护）；`$1..$99`/`$0` 引用捕获组，`$$` 是字面 `$`
 - `before` = 匹配起点之前，`after` = 匹配结束之后；两者可同时给
-- 命中次数：返回值 `inject.groups[].matches`、`status.inject_hits`（按 URL 累加）、`log` 里都能看到；一处都没命中时该文件进 `skipped_files`，`reason: "no_inject_matches"`
+- 命中与跳过统计：返回值 `inject.groups[].insertions`（及原始匹配数 `.matches`）、`status`/`log` 的 `inject_hits`（按 `group` 在路由生命周期内跨新改写脚本累加）、`inject_skipped`、`inject_literal_skips`；0 处插入时进 `skipped_files`，按实情区分 `no_inject_matches`、`inject_literal_only` 或 `inject_would_break_syntax`
 - 不破坏语法的策略（顺序即优先级）：
-  1. 片段一律包成完整语句（前面补 `;`、末尾补 `;`），插入点落在任何语句边界都合法；单行片段不改变原行号（断点行号仍可用），片段自带 `//` 时改用换行包裹
-  2. 命中落在字符串 / 模板 / 注释 / 正则字面量里 → 这一处**跳过**并计入 `inject_literal_skips` 与 `inject.groups[].literal_skips`（这种插入即使不报错也永远不会执行）
-  3. `before` 落在 `case <expr>:` / `default:` 标签前 → 自动挪到标签冒号之后（`label_shift`）：switch 的 CaseBlock 只允许 case/default 子句，第一个标签前的语句是语法错误，后面标签前的语句属于上一个子句（直接跳进来时不执行）
-  4. 原脚本能被解析时，插入后再解析一次；仍不可解析就整组跳过，报 `skipped_groups[].reason: "would break syntax"`（可解析的文件不会被改坏）；原脚本本来就解析不了（现代语法、混淆产物）时这一条先报 `validation: "source_unparseable"`，但 `mode='ast'` 的模式改写会用本地 Acorn 再解析注入后的文本，解析成功就把结果升级成 `validation: "ok (parsed by the mode rewrite)"`，所以 `inject.validation` 是可信的最终结论
-- 注入跑在模式改写**之前**：`find` 始终对着原始脚本匹配，偏移不受 `ast`/`regex` 改写影响；注入的语句之后可能被顺手打点（只多日志，不改结果）。`inject_validate=False` 关掉的是第 4 条解析校验，第 1/2 条仍然生效
+  1. 片段一律包成完整语句（首尾 `;` 守卫，即使以 `}` 结尾也补 `;`；含换行或 `//` 时改用 `;\n…\n;` 包裹，防止行注释吞掉尾分号）。单行片段自身不新增换行（`lines_added == 0`；注：`mode="ast"` 会在文件顶部注入 runtime 头使行号整体下移，仅 `mode="regex"` 且无成员改写时保留原始行号）
+  2. 命中落在字符串 / 模板文本段（支持 `${...}` 嵌套追踪） / 注释 / 正则字面量（区分 `i++/2`、`obj.return / 2` 与 `if (...) /re/`）里 → 逐处跳过并计入 `inject_literal_skips`
+  3. `before` 落在 `switch` 的 `case <expr>:` / `default:` 标签处 → 词法跳过字面量、括号与三元运算符 `? :` 自动挪到该标签冒号之后（`label_shift`），并排除对象字面量属性 `{default: ...}`
+  4. 原脚本可解析（先进程内 `esprima`，现代语法回退本地随包 Acorn）时，插入后再解析校验；若整体不通过则**逐组回退**，坏组标记 `skipped_groups[].reason: "would break syntax"`
+- 注入跑在模式改写**之前**：`find` 始终对着原始脚本匹配，偏移不受 `ast`/`regex` 改写影响；`inject_validate=False` 仅跳过第 4 条重解析校验，第 1/2/3 条词法与语句守卫仍然生效
 - 插入的代码运行在页面主世界（和现有插桩一致），读它挂的全局要用 `evaluate_js("window.__hit || []", world="main")`
 - 想离线预览再注回页面：`instrumentation(action="rewrite_source", source_path=..., output_path=..., inject=[...])`，然后 `intercept_request(action="mock", url_pattern=..., mock_response={"body_file": output_path})`
 
@@ -221,8 +221,8 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
 | source | 取脚本全文；longString 分片按 UTF-16 码元拼接，超 `max_chars` 显式标记 `truncated` |
 | breakable_lines | 某脚本的可断行号 |
 | breakable_positions | 某脚本（或某一行）的可停位置：`columns_0based` / `columns_1based` |
-| set_breakpoint | 下断点：`url_pattern` + `find` 按 URL glob 与正则定位（`occurrence` 选第几个匹配，内部把偏移换算成 `line/column`；URL 带随机 `js_data` 时用这个），`source_url` 走 `sourceUrl`（内联脚本、导航后都挂得上），`source` 走 `sourceId`（eval / `new Function`）；`column` 收 1-based 并吸附到最近可停列；行上不可停时返回 `installed: false` |
-| remove_breakpoint | 删行断点：按当初下发的 location 精确删除；要给 `line`/`source`/`source_url`/`url_substr` 之一，或 `remove_all=true` 清空 |
+| set_breakpoint | 下断点：`url_pattern` + `find` 按 URL glob 与正则定位（`occurrence` ≥ 1 选第几个匹配，内部把偏移换算成 `line/column`；适合 URL 带随机查询参数的目标），`source_url` 走 `sourceUrl`（内联脚本、导航后都挂得上），`source` 走 `sourceId`（eval / `new Function`）；`column` 收 1-based 并吸附到最近可停列；行上不可停时返回 `installed: false` |
+| remove_breakpoint | 删行断点：按当初下发的 location 精确删除；要给 `line`/`source`/`source_url`/`url_substr`/`url_pattern`/`find` 之一，或 `remove_all=true` 清空 |
 | wait_paused | 等下一次命中，只接受 `resume`/`step`/`interrupt` 之后新到的 `paused`，返回 frame / where / why |
 | frames | 当前暂停的完整调用栈；不处于暂停态时返回 `{"error": "wrongState"}` |
 | scopes | 某帧的递归作用域链与各层 bindings（变量值），需要 `frame_actor` |
@@ -251,12 +251,12 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
   `remove_breakpoint` 就是这么做的。反过来，只用 `source`（sourceId）下的断点绑定在
   某个 source actor 上，导航后那个 actor 就没了，`reload` 会在 `reapply_skipped` 里
   明确报告重下不了 —— 需要跨导航的断点请用 `url_pattern` + `find` 或 `source_url`。
-- 最小用法（URL 带 `js_data`、opcode 换 build 的通吃写法）：
+- 最小用法（URL 带动态哈希/时间戳、opcode 换 build 的通用写法）：
 
   ```text
   rdp_debugger(
     action="set_breakpoint",
-    url_pattern="**/tdc.js*",
+    url_pattern="**/vm-bundle*.js*",
     find=r"case (0x[0-9a-f]+):(_0x[0-9a-f]+)\[",
     occurrence=1,
     condition="p === 0x22"
@@ -265,13 +265,12 @@ content sandbox 以允许内容进程写入；普通启动不会改动 sandbox�
   rdp_debugger(action="reload", wait_page=8)
   ```
 
-- **URL 每次都变的目标（URL 里带 `js_data`、`?t=时间戳`）用 `url_pattern` + `find`**：
-  同一个站点 11 次抓包能出 10 份不同 sha256，精确 URL 和 sourceId 都撑不过一次 reload。
+- **URL 每次请求都变化的目标（URL 带动态查询串或版本哈希）用 `url_pattern` + `find`**：
+  每轮下发不同字节哈希的脚本时，精确 URL 和 `sourceId` 都撑不过一次 `reload`。
   断点记录会保存 glob + 正则 + `occurrence`，`reload` / `enable` 重建线程后自动
-  重新 `sources()` → 找到新 actor → 重算偏移 → 重下；新 build 里正则不再命中时，
+  重新 `sources()` → 找到新 actor → 重算偏移 → 重下；新构建里正则不再命中时，
   `reapply_failed` 里给出 `{pattern, url_pattern, reason: "regex not found", searched}`。
-  换成 `after`/`before` 的具体位置由正则表达，所以「同一处代码」在脚本整体后移、
-  行号/列号全变的情况下仍然对得上。
+  位置由正则表达，因此目标代码在脚本整体平移、行号/列号全变的情况下仍然对得上。
 - `thread.attach` 必须带 `options:{}`，否则线程停在 DETACHED，`sources` 恒为 0 且不报错。
 - `setXHRBreakpoint` 的 `method` 必须是 `"ANY"` 或真实方法名，传空串永不匹配；移除
   同样是 path+method 精确匹配，所以不能用 `"remove"` 当 method（工具会重发当初设置

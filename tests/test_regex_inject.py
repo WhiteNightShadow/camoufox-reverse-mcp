@@ -1,4 +1,4 @@
-"""P0-1 源码级正则插桩：`instrumentation(inject=[{find, before/after, group}])`。
+"""源码级正则插桩：`instrumentation(inject=[{find, before/after, group}])`。
 
 覆盖：
   * 纯逻辑：`$n` 展开、语句包裹、before/after 插入位置、每组命中次数
@@ -29,7 +29,7 @@ from camoufox_reverse_mcp.utils.regex_inject import (
 NODE = shutil.which("node")
 needs_node = pytest.mark.skipif(NODE is None, reason="Node.js is unavailable")
 
-# 天御 tdc.js 里实测过的形状：opcode 是 build 绑定的常量，dispatcher 调用被扁平化。
+# 典型多态 VM 形状：opcode 是随构建变化的常量，dispatcher 调用被扁平化。
 DISPATCH = (
     "var _0xa=0,_0xb=0,_0xc=0,_0xd=1,_0xe=2,_0xf=[3];\n"
     "function l(p){switch(p){\n"
@@ -57,11 +57,12 @@ def test_expand_template_handles_groups_dollar_and_missing_group():
 
 def test_normalize_snippet_makes_one_complete_statement():
     assert normalize_snippet("window.__hit=1") == ";window.__hit=1;"
-    assert normalize_snippet("try{}catch(e){}") == ";try{}catch(e){}"
+    assert normalize_snippet("try{}catch(e){}") == ";try{}catch(e){};"
+    assert normalize_snippet("window.__last={op:1}") == ";window.__last={op:1};"
     assert normalize_snippet(" ; ") == ";;"
-    # 片段自带 `//` 行注释时必须换行，否则会吃掉同一行后面的原代码
-    assert normalize_snippet("a=1 // note") == ";\na=1 // note;\n"
-    assert normalize_snippet("a=1;\nb=2;") == ";\na=1;\nb=2;\n"
+    # 片段自带 `//` 行注释时必须把尾分号放到换行之后，防止吞掉尾分号并粘连下一行 `(fn)()`
+    assert normalize_snippet("a=1 // note") == ";\na=1 // note\n;"
+    assert normalize_snippet("a=1;\nb=2;") == ";\na=1;\nb=2;\n;"
 
 
 def test_before_inserts_at_match_start_and_counts_each_group():
@@ -75,7 +76,7 @@ def test_before_inserts_at_match_start_and_counts_each_group():
     text = result["text"]
     for opcode, reg in (("0x22", "_0xc"), ("0x4b", "_0xc")):
         marker = (f"case {opcode}:;try{{(window.__hit=window.__hit||[]).push("
-                  f"[{opcode},{reg}]);}}catch(e){{}}_0xa[")
+                  f"[{opcode},{reg}]);}}catch(e){{}};_0xa[")
         assert marker in text, text[:400]
     # 单行片段不引入换行：断点行号不会漂移
     assert result["lines_added"] == 0
@@ -141,10 +142,10 @@ def test_one_broken_group_does_not_drop_the_healthy_one():
 
 
 def test_unparseable_source_skips_validation_but_still_inserts():
-    modern = "const o = a?.b ?? 1;\n" + DISPATCH  # esprima 不认识可选链
+    non_standard = "@decorator\nclass X {}\n" + DISPATCH  # 非标准装饰器语法，esprima 与 Acorn 均不解析
     with pytest.raises(Exception):
-        esprima.parseScript(modern)
-    result = apply_inject_groups(modern, GROUPS)
+        esprima.parseScript(non_standard)
+    result = apply_inject_groups(non_standard, GROUPS)
     assert result["validated"] is False
     assert result["validation"] == "source_unparseable"
     assert result["insertions"] == 2
@@ -199,7 +200,7 @@ async def harness(monkeypatch):
     return context
 
 
-def _route(body: bytes, url="https://example.test/tdc.js?js_data=abc"):
+def _route(body: bytes, url="https://example.test/vm-bundle.js?v_token=abc"):
     response = SimpleNamespace(body=AsyncMock(return_value=body), status=200,
                                headers={"content-type": "application/javascript"})
     return SimpleNamespace(request=SimpleNamespace(url=url), fetch=AsyncMock(return_value=response),
@@ -208,7 +209,7 @@ def _route(body: bytes, url="https://example.test/tdc.js?js_data=abc"):
 
 async def test_install_reports_groups_and_serves_inserted_code(harness):
     result = await instrumentation.instrumentation(
-        "install", url_pattern="**/tdc.js*", tag="tdcx", mode="regex",
+        "install", url_pattern="**/vm-bundle.js*", tag="vm", mode="regex",
         inject=GROUPS, tap_stage_calls=True)
     assert result["status"] == "instrumenting"
     assert result["inject_groups"] == ["write-opcode"]
@@ -230,7 +231,7 @@ async def test_install_reports_groups_and_serves_inserted_code(harness):
 
 async def test_zero_inject_hits_is_reported_as_such(harness):
     await instrumentation.instrumentation(
-        "install", url_pattern="**/tdc.js*", mode="regex",
+        "install", url_pattern="**/vm-bundle.js*", mode="regex",
         inject=[{"find": r"case 0xff:", "before": "window.__hit=1", "group": "nope"}])
 
     route = _route(b"var a = 1;")
@@ -246,7 +247,7 @@ async def test_zero_inject_hits_is_reported_as_such(harness):
 async def test_literal_skip_is_visible_in_status(harness):
     """命中落在字符串里：不插（插了也不执行），但命中数和跳过数都要在 status 里看得到。"""
     src = b'var s = "case 0x22:_0xa[_0xb[++_0xc]][_0xa[";\n'
-    await instrumentation.instrumentation("install", url_pattern="**/tdc.js*",
+    await instrumentation.instrumentation("install", url_pattern="**/vm-bundle.js*",
                                          mode="regex", inject=GROUPS)
     route = _route(src)
     await harness.handler(route)
@@ -256,18 +257,18 @@ async def test_literal_skip_is_visible_in_status(harness):
     assert status["inject_hits"] == {"write-opcode": 0}
     assert status["inject_skipped"] == {}
     [record] = status["skipped_files"]
-    assert record["reason"] == "no_inject_matches"
+    assert record["reason"] == "inject_literal_only"
 
 
 async def test_install_rejects_an_invalid_inject_spec(harness):
     result = await instrumentation.instrumentation(
-        "install", url_pattern="**/tdc.js*", inject=[{"group": "broken"}])
+        "install", url_pattern="**/vm-bundle.js*", inject=[{"group": "broken"}])
     assert "invalid inject spec" in result["error"]
     assert result["inject_problems"]
 
 
 async def test_ast_mode_still_works_with_inject(harness):
-    await instrumentation.instrumentation("install", url_pattern="**/tdc.js*",
+    await instrumentation.instrumentation("install", url_pattern="**/vm-bundle.js*",
                                          inject=GROUPS)
     route = _route(DISPATCH.encode())
     await harness.handler(route)
@@ -281,22 +282,59 @@ async def test_ast_mode_still_works_with_inject(harness):
 
 @needs_node
 async def test_ast_parse_validates_the_insertion_for_modern_syntax(harness):
-    """esprima 读不了的现代语法：模式改写用 acorn 解析成功 ⇒ 注入结果等于被校验过。"""
+    """esprima 读不了的现代语法：Acorn 预校验与模式改写均通过校验。"""
     modern = "const o = a?.b ?? 1;\n" + DISPATCH
-    await instrumentation.instrumentation("install", url_pattern="**/tdc.js*",
+    await instrumentation.instrumentation("install", url_pattern="**/vm-bundle*.js*",
                                          inject=GROUPS)
     route = _route(modern.encode())
     await harness.handler(route)
     report = instrumentation._get_status()["active_patterns"][0]["last_inject"]
     assert report["validated"] is True
-    assert "parsed by the mode rewrite" in report["validation"]
+    assert report["validation"].startswith("ok")
     assert "push([0x22,_0xc])" in route.fulfill.call_args.kwargs["body"]
 
 
+@needs_node
+def test_modern_syntax_group_fallback_rejects_broken_group():
+    """含 `?.`/`??` 的现代脚本若某组注入破坏语法，必须逐组回退而不是放行坏代码。"""
+    modern = "const v = obj?.prop ?? 0;\n" + DISPATCH
+    groups = [
+        {"find": r"case (0x[0-9a-f]+):", "before": "window.__ok=$1", "group": "good"},
+        {"find": r"case 0x4b:", "before": "function broken(", "group": "bad"},
+    ]
+    res = apply_inject_groups(modern, groups)
+    assert res["validated"] is True
+    assert res["validation"] == "group_fallback"
+    assert res["insertions"] == 2
+    assert [g["group"] for g in res["skipped_groups"]] == ["bad"]
+    assert "window.__ok=0x22" in res["text"]
+    assert "function broken(" not in res["text"]
+
+
+def test_lexical_edge_cases_postfix_div_nested_template_ternary_and_object_default():
+    """回归审计发现的 5 类词法/标签边界：后缀 `++/`、嵌套 `${}`、三元 `?:`、`{default:1}`、`if()/re/`。"""
+    src = (
+        'var i=10,q=i++/2,m=obj.return/2,o={default:1};'
+        'if(q)/a"b/.test("x");'
+        'var t=`pre ${"`"} case 0x11: fake`;'
+        'switch(i){case f?1:2:window.r=1;break;case "a:b":window.r=2;break;case 0x22:window.r=3;break;}'
+    )
+    res = apply_inject_groups(src, [
+        {"find": r'case (?:f\?1:2|"a:b"|0x[0-9a-f]+)', "before": "window.__last={h:1}", "group": "cases"},
+        {"find": r"default:1", "before": "window.__bad=1", "group": "obj_default"},
+    ])
+    assert res["validated"] is True
+    # `t` 模板外的 3 个真实 case（含三元、含冒号字符串、无尾冒号正则）全部正确挪到标签冒号后；
+    # 模板内 fake case 不命中真实代码，对象 `{default:1}` 因破坏对象语法被 group_fallback 安全剔除。
+    assert res["insertions"] == 3
+    assert [g["group"] for g in res["skipped_groups"]] == ["obj_default"]
+    esprima.parseScript(res["text"])
+
+
 async def test_rewrite_source_applies_inject_offline(tmp_path):
-    src = tmp_path / "tdc.js"
+    src = tmp_path / "vm-bundle.js"
     src.write_text(DISPATCH, encoding="utf-8")
-    out = tmp_path / "tdc.instrumented.js"
+    out = tmp_path / "vm-bundle.instrumented.js"
     result = await instrumentation.instrumentation(
         "rewrite_source", source_path=str(src), output_path=str(out),
         mode="regex", inject=GROUPS)
@@ -309,7 +347,7 @@ async def test_rewrite_source_applies_inject_offline(tmp_path):
 
 
 async def test_rewrite_source_reports_no_inject_matches(tmp_path):
-    src = tmp_path / "tdc.js"
+    src = tmp_path / "vm-bundle.js"
     src.write_text("var a = 1;", encoding="utf-8")
     result = await instrumentation.instrumentation(
         "rewrite_source", source_path=str(src),
