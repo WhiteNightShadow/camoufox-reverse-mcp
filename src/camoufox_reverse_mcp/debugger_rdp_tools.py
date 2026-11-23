@@ -1333,6 +1333,15 @@ class FireFoxDebugger:
                 raise RdpError("RDP 启动已取消")
         if self._cancel.wait(min(0.3, wait_page)):
             raise RdpError("RDP 启动已取消")
+        try:
+            final_tabs = (self.rdp.call({"to": "root", "type": "listTabs"}, 10) or {}).get("tabs") or []
+        except Exception:
+            final_tabs = []
+        if not final_tabs:
+            raise RdpError(
+                f"RDP launch produced no usable tab (port={self.port}, waited={wait_page}s). "
+                "Try a larger wait_page, call enable() again (it polls 5s), or attach() to a running instance."
+            )
 
     def attach(self, port: int | None = None, unix_path: str | None = None,
                timeout: float = 20.0) -> dict:
@@ -1426,6 +1435,24 @@ class FireFoxDebugger:
             return True
         except (RdpError, OSError):
             return False
+
+    def _wait_for_tabs(self, rdp, timeout: float = 5.0) -> list:
+        """Poll listTabs until at least one tab exists (or timeout).
+
+        A freshly launched browser can accept the RDP connection before it
+        registers its first tab; the previous code read listTabs once and
+        failed with "no tabs" in that window.
+        """
+        end = time.monotonic() + max(timeout, 0.0)
+        tabs: list = []
+        while True:
+            try:
+                tabs = (rdp.call({"to": "root", "type": "listTabs"}, 25) or {}).get("tabs") or []
+            except Exception:
+                tabs = []
+            if tabs or time.monotonic() >= end:
+                return tabs
+            time.sleep(0.1)
 
     def enable(self, url_substr: str | None = None, target_type: str = "frame") -> dict:
         """tab → target form → threadActor → attach。

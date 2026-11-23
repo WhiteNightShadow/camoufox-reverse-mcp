@@ -77,8 +77,51 @@ class BrowserManager:
         self._trace_started_at: float | None = None
         self._trace_action_lock = asyncio.Lock()
 
+    async def _session_is_usable(self) -> bool:
+        """True unless the handle is *definitively* dead.
+
+        Only a definitive signal marks the session dead: ``is_connected()``
+        returning False, or every page reporting ``is_closed() == True``.
+        Objects without those methods (fakes, older Playwright) count as alive,
+        so this check never turns a usable session into a relaunch.
+        """
+        if self.browser is None:
+            return False
+        probe = getattr(self.browser, "is_connected", None)
+        if callable(probe):
+            try:
+                if probe() is False:
+                    return False
+            except Exception:
+                pass
+        pages = [p for p in list(self.pages.values()) if p is not None]
+        if not pages:
+            return True  # nothing tracked yet; do not claim it is dead
+        for page in pages:
+            closed = getattr(page, "is_closed", None)
+            if not callable(closed):
+                return True
+            try:
+                if not closed():
+                    return True
+            except Exception:
+                return True
+        return False
+
     async def launch(self, config: dict | None = None) -> dict:
         """Launch the Camoufox browser with the given or default config."""
+        self._recovered_stale_session = False
+        if self.browser is not None and not await self._session_is_usable():
+            # The previous handle is dead (browser crashed or every page closed).
+            # Keeping it would make every later call fail with
+            # "Target page, context or browser has been closed".
+            self._recovered_stale_session = True
+            try:
+                await self.close()
+            except Exception:
+                self.browser = None
+                self.pages.clear()
+                self.contexts.clear()
         if self.browser is not None:
             pages_info = {}
             for name, p in self.pages.items():
@@ -275,6 +318,7 @@ class BrowserManager:
 
         result = {
             "status": "launched",
+            "recovered_stale_session": bool(getattr(self, "_recovered_stale_session", False)),
             "headless": headless,
             "os": os_type,
             "locale": locale,
@@ -639,9 +683,20 @@ class BrowserManager:
     async def get_active_page(self) -> Page:
         """Get the currently active page, launching the browser if needed."""
         await self._ensure_browser()
-        if self.active_page_name and self.active_page_name in self.pages:
-            return self.pages[self.active_page_name]
-        raise RuntimeError("No active page available. Call launch_browser first.")
+        page = self.pages.get(self.active_page_name) if self.active_page_name else None
+        if page is not None:
+            closed = getattr(page, "is_closed", None)
+            if not callable(closed):
+                return page
+            try:
+                if not closed():
+                    return page
+            except Exception:
+                return page
+        raise RuntimeError(
+            "No active page available (dead session detected). Call launch_browser() again; "
+            "it now detects the stale handle and relaunches instead of reporting already_running."
+        )
 
     async def close(self) -> dict:
         """Close the browser and clean up all resources.

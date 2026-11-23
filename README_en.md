@@ -134,7 +134,7 @@ The client should launch the browser and return the title `Example Domain`. If s
 
 ## Tools
 
-42 tools in 10 groups. See the [tool reference](docs/TOOLS_en.md) for details and usage scenarios.
+43 tools in 10 groups. See the [tool reference](docs/TOOLS_en.md) for details and usage scenarios.
 
 | Group | Count | What it covers |
 |---|---:|---|
@@ -142,7 +142,7 @@ The client should launch the browser and return the title `Example Domain`. If s
 | [JS Execution & Debugging](docs/TOOLS_en.md#js-execution--debugging) | 2 | Run JS in the isolated context or the page main world, record replayable sessions |
 | [Script Analysis](docs/TOOLS_en.md#script-analysis) | 2 | List, read and save scripts, search code |
 | [Hooking & Tracing](docs/TOOLS_en.md#hooking--tracing) | 5 | Function hooks and traces, preset hooks, console logs |
-| [Network Analysis](docs/TOOLS_en.md#network-analysis) | 8 | Capture, intercept, initiator stacks, compare, export |
+| [Network Analysis](docs/TOOLS_en.md#network-analysis) | 9 | Capture, intercept, initiator stacks, compare, export |
 | [JSVMP Reverse Analysis](docs/TOOLS_en.md#jsvmp-reverse-analysis) | 4 | Runtime probes, source instrumentation, state-level capture, environment fingerprints and bundles |
 | [Firefox RDP Debugging](docs/TOOLS_en.md#firefox-rdp-debugging) | 1 | Real breakpoints, stepping, call stacks, scopes, paused-frame evaluation, request breakpoints (native Firefox RDP, no CDP needed) |
 | [Cookies & Storage](docs/TOOLS_en.md#cookies--storage) | 4 | Cookies, storage, browser state import and export |
@@ -185,7 +185,7 @@ Put them after the start command. With uvx, put them after `camoufox-reverse-mcp
 
 - **v1.12.0** (2026-11-20): `instrumentation` gains `inject` for source-level regex insertion (modern JS validation, literal/template guards and `case` label shifting); `intercept_request` accepts `mock_response.body_file` re-read per request; `rdp_debugger` supports `url_pattern` + `find` pattern breakpoints across reloads. [Notes](docs/releases/v1.12.0.md)
 - **v1.11.1** (2026-11-15): skips the two POSIX Unix-socket path tests on Windows CI and aligns release note validation with the automated release workflow. [Notes](docs/releases/v1.11.1.md)
-- **v1.11.0** (2026-11-15): adds `rdp_debugger` over Firefox's native RDP for real breakpoints, stepping, call stacks, scopes, paused-frame evaluation and pre-request breakpoints; shares `launch_browser` fingerprint/proxy/active-build settings and supports 0700 Unix sockets on macOS/Linux (42 tools in total). [Notes](docs/releases/v1.11.0.md)
+- **v1.11.0** (2026-11-15): adds `rdp_debugger` over Firefox's native RDP for real breakpoints, stepping, call stacks, scopes, paused-frame evaluation and pre-request breakpoints; shares `launch_browser` fingerprint/proxy/active-build settings and supports 0700 Unix sockets on macOS/Linux (43 tools in total). [Notes](docs/releases/v1.11.0.md)
 
 See [CHANGELOG_en.md](CHANGELOG_en.md) for every version.
 

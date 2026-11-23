@@ -2,7 +2,7 @@
 
 [中文](TOOLS.md) | [English](TOOLS_en.md)
 
-42 tools in 10 groups. See the [README](../README_en.md) for installation and server options.
+43 tools in 10 groups. See the [README](../README_en.md) for installation and server options.
 
 - [Available Tools](#available-tools-42)
 - [Usage Scenarios](#usage-scenarios)
@@ -52,6 +52,7 @@
 | `list_network_requests` | List captured requests (filter by URL / domain / method / type / status) |
 | `get_network_request` | Get full request details (`max_body_size` controls body truncation) |
 | `get_request_initiator` | Get JS call stack that initiated a request |
+| `extract_script` | Pull a script string out of a captured response (`json_path` walks JSON, e.g. `data.data`); optional `output_file`. For fetch+eval SDKs: that code has no script resource, so source search and route rewriting cannot reach it |
 | `intercept_request` | Intercept requests: log / block / modify / mock / stop. `mock_response` takes `body` (inline text) or `body_file` (regular UTF-8 file <= 10 MiB, relative paths resolve against the server working directory, re-read per request in a worker thread; mutually exclusive — fulfilled responses are readable by page scripts, so never point `body_file` at credentials or private local files) |
 | `export_network_capture` | Export a versioned JSON snapshot; masks header and query values and omits bodies by default, never overwrites a file |
 | `compare_network_requests` | Compare 2 to 10 captured requests without sending requests or launching a browser |

@@ -2,7 +2,7 @@
 
 [中文](TOOLS.md) | [English](TOOLS_en.md)
 
-共 42 个工具，按用途分 10 类。安装方式和启动参数见 [README](../README.md)。
+共 43 个工具，按用途分 10 类。安装方式和启动参数见 [README](../README.md)。
 
 - [可用工具一览](#可用工具一览)
 - [使用场景示例](#使用场景示例)
@@ -52,6 +52,7 @@
 | `list_network_requests` | 列出已捕获的请求（支持 URL / 域名 / 方法 / 类型 / 状态码过滤） |
 | `get_network_request` | 获取请求完整详情（`max_body_size` 控制 body 截断） |
 | `get_request_initiator` | 获取请求发起的 JS 调用栈 |
+| `extract_script` | 从已捕获响应里取出一段脚本（按 `json_path` 走 JSON，如 `data.data`）；可写 `output_file`。用于 fetch+eval 型 SDK：这类代码没有 script 资源，源码搜索与路由改写都够不到 |
 | `intercept_request` | 拦截请求：log / block / modify / mock / stop。`mock_response` 支持 `body`（内联文本）或 `body_file`（≤10 MiB 的常规 UTF-8 文件，相对路径按服务器工作目录解析、每次请求在工作线程重读，两者互斥；注意响应内容对页面脚本可读，勿指向本地敏感凭据文件） |
 | `export_network_capture` | 导出带版本号的 JSON 快照；默认掩码请求头和查询参数、不含 body，不覆盖已有文件 |
 | `compare_network_requests` | 对比 2 到 10 个已捕获的请求，不发请求，也不需要启动浏览器 |
