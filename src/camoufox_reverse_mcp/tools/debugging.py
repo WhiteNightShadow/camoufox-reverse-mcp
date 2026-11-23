@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..server import mcp, browser_manager
+from ..utils.evidence import preview, write_bytes_evidence, write_text_evidence
 from ..utils.frames import resolve_frame
 from ..utils.worlds import evaluate_in_world
 
@@ -116,6 +117,9 @@ async def evaluate_js(
     frame_name: str | None = None,
     frame_index: int | None = None,
     result_format: str = "auto",
+    output_file: str | None = None,
+    output_encoding: str = "utf8",
+    overwrite: bool = False,
 ) -> dict:
     """Execute an arbitrary JavaScript expression in the page context and return the result.
 
@@ -140,6 +144,14 @@ async def evaluate_js(
         frame_url: Optional exact frame URL or shell-style wildcard.
         frame_name: Optional exact frame name or shell-style wildcard.
         frame_index: Optional zero-based index from get_page_info().frames.
+        output_file: Write the string result to this path instead of returning
+            it. Use it for page blobs (bytecode, device state, rendered
+            documents): multi-kilobyte values otherwise truncate or flood the
+            conversation. The response carries path/bytes/sha256 and a short
+            preview.
+        output_encoding: "utf8" writes the string as UTF-8; "base64" decodes
+            the string first, for binary payloads.
+        overwrite: Allow replacing an existing output_file.
         result_format: "auto" (legacy cleanup) or "json_ascii" (ASCII JSON text
             in value, not parsed/trimmed). json_ascii follows JSON.stringify:
             tag non-finite numbers/-0/undefined explicitly if their distinction
@@ -266,6 +278,36 @@ async def evaluate_js(
         # The JS wrapper now explicitly returns {result: null, type: "undefined"/"object"}
         # for undefined/null values instead of crashing on JSON.parse(JSON.stringify(undefined))
         result_val = raw.get("result") if isinstance(raw, dict) else raw
+
+        # Generic evidence out: large string results (page blobs, device state,
+        # rendered documents) go straight to disk instead of the conversation.
+        if output_file:
+            if not isinstance(result_val, str):
+                return _decorate(_build_error_response(
+                    "output_file requires the expression to return a string; "
+                    f"got {type(result_val).__name__}. Wrap it, e.g. "
+                    "JSON.stringify(value) or btoa(String.fromCharCode(...bytes))."
+                ))
+            if output_encoding not in ("utf8", "base64"):
+                return _decorate(_build_error_response(
+                    "output_encoding must be utf8 or base64"
+                ))
+            try:
+                import base64 as _b64
+                payload = result_val.encode("utf-8") if output_encoding == "utf8" \
+                    else _b64.b64decode(result_val, validate=False)
+                meta = write_bytes_evidence(output_file, payload, overwrite=overwrite)
+            except Exception as exc:
+                return _decorate(_build_error_response(
+                    f"failed to write output_file: {exc}"
+                ))
+            return _decorate({
+                "type": "file",
+                "value": None,
+                "output": meta,
+                "preview": preview(result_val),
+                "warnings": None,
+            })
         js_type = raw.get("type") if isinstance(raw, dict) else None
         js_value_type = js_type
         warnings_list: list[str] = []

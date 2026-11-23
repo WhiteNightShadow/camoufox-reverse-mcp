@@ -5,6 +5,7 @@ import inspect
 import os
 
 from ..server import mcp, browser_manager
+from ..utils.evidence import preview, write_bytes_evidence, write_text_evidence
 from ..utils.domains import domain_matches
 
 
@@ -14,6 +15,8 @@ async def cookies(
     domain: str | None = None,
     cookies_list: list[dict] | None = None,
     name: str | None = None,
+    output_file: str | None = None,
+    overwrite: bool = False,
 ) -> dict | list:
     """Cookie management (v0.9.0 unified).
 
@@ -31,7 +34,14 @@ async def cookies(
 
     Returns:
         For "get": list of cookie dicts.
+        For "header": {"action", "count", "names", "header", "domain"}
+            plus file metadata when output_file is used.
         For "set"/"delete": dict with status and count.
+
+    Notes:
+        action="header" returns a ready-to-use Cookie header value and
+        deduplicates by name; pass output_file to persist it instead of
+        copying a multi-kilobyte header through the conversation.
     """
     try:
         page = await browser_manager.get_active_page()
@@ -42,6 +52,22 @@ async def cookies(
             if domain:
                 all_cookies = [c for c in all_cookies if domain_matches(c.get("domain", ""), domain)]
             return all_cookies
+
+        elif action == "header":
+            all_cookies = await ctx.cookies()
+            if domain:
+                all_cookies = [c for c in all_cookies if domain_matches(c.get("domain", ""), domain)]
+            header, used = build_cookie_header(all_cookies)
+            result = {
+                "action": "header",
+                "count": len(used),
+                "names": [c.get("name") for c in used],
+                "header": header,
+                "domain": domain,
+            }
+            if output_file:
+                result.update(write_text_evidence(output_file, header, overwrite=overwrite))
+            return result
 
         elif action == "set":
             if not cookies_list:
@@ -161,3 +187,22 @@ async def import_state(state_path: str) -> dict:
         return {"status": "imported", "context": ctx_name, "path": state_path}
     except Exception as e:
         return {"error": str(e)}
+
+
+def build_cookie_header(cookies: list[dict]) -> tuple[str, list[dict]]:
+    """Join cookies into one ``Cookie:`` header value.
+
+    Duplicates (same name, different domain/path) keep the first occurrence, so
+    deterministic ordering is preserved; the host's own jar order still decides
+    which value wins for the request that matters.
+    """
+    seen: set[str] = set()
+    used: list[dict] = []
+    for c in cookies:
+        name = c.get("name")
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        used.append(c)
+    header = "; ".join(f"{c['name']}={c.get('value', '')}" for c in used)
+    return header, used

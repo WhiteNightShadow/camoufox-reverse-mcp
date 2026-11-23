@@ -435,20 +435,117 @@ async def wait_for(
     selector: str | None = None,
     url_pattern: str | None = None,
     timeout: int = 30000,
+    mode: str = "auto",
+    after_id: int | None = None,
+    poll_interval_ms: int = 100,
 ) -> dict:
-    """Wait for an element to appear or a network request matching a URL pattern."""
+    """Wait for an element, a captured network request, or a navigation.
+
+    Args:
+        selector: CSS selector to wait for.
+        url_pattern: URL substring (or shell-style glob when it contains
+            ``*``) used by request/navigation modes.
+        timeout: Max wait in milliseconds.
+        mode: Which condition ``url_pattern`` means.
+            "auto" (default) matches a captured request when network capture is
+            already running, otherwise falls back to navigation.
+            "request" only matches captured requests and reports a clear hint
+            when nothing arrives, so "the request never fired" is not confused
+            with "the page did not navigate".
+            "navigation" keeps the previous behaviour (page.wait_for_url).
+        after_id: Optional request id; only requests with a larger id match, so
+            an already-captured request cannot satisfy a later wait.
+        poll_interval_ms: Polling interval for request mode.
+
+    Returns:
+        dict with ``status`` plus ``mode``; request mode also returns the
+        matched request summary (``id``/``url``/``method``/``status``/``ms``).
+    """
     try:
+        if mode not in ("auto", "request", "navigation"):
+            return {"error": f"invalid mode: {mode}. Use auto/request/navigation"}
         page = await browser_manager.get_active_page()
-        if selector:
+        if selector and not url_pattern:
             await page.wait_for_selector(selector, timeout=timeout)
-            return {"status": "found", "selector": selector}
-        elif url_pattern:
-            await page.wait_for_url(url_pattern, timeout=timeout)
-            return {"status": "matched", "url_pattern": url_pattern}
-        else:
+            return {"status": "found", "mode": "selector", "selector": selector}
+        if not url_pattern:
             return {"error": "Provide either selector or url_pattern"}
+
+        capture_on = bool(getattr(browser_manager, "_capturing", False)) or bool(
+            getattr(browser_manager, "_network_requests", None)
+        )
+        wait_request = mode == "request" or (mode == "auto" and capture_on)
+
+        if wait_request:
+            started = int(asyncio.get_event_loop().time() * 1000)
+            interval = max(int(poll_interval_ms), 10) / 1000
+            while True:
+                match = find_captured_request(
+                    list(getattr(browser_manager, "_network_requests", []) or []),
+                    url_pattern,
+                    after_id=after_id,
+                )
+                if match is not None:
+                    return {
+                        "status": "matched",
+                        "mode": "request",
+                        "url_pattern": url_pattern,
+                        "request": _request_summary(match),
+                    }
+                if int(asyncio.get_event_loop().time() * 1000) - started >= timeout:
+                    if mode == "auto":
+                        break  # fall back to navigation below
+                    return {
+                        "status": "timeout",
+                        "mode": "request",
+                        "url_pattern": url_pattern,
+                        "capture_active": bool(getattr(browser_manager, "_capturing", False)),
+                        "hint": (
+                            "No captured request matched. Check that network_capture(action='start') "
+                            "is running, reproduce the action that should trigger the request, and use "
+                            "list_network_requests to confirm the URL. Pass mode='navigation' if you "
+                            "really meant to wait for a page navigation."
+                        ),
+                    }
+                await asyncio.sleep(interval)
+
+        await page.wait_for_url(url_pattern, timeout=timeout)
+        return {"status": "matched", "mode": "navigation", "url_pattern": url_pattern}
     except Exception as e:
         return {"error": str(e)}
+
+
+def _request_summary(entry: dict) -> dict:
+    """Stable subset of a captured request for tool responses."""
+    keys = ("id", "url", "method", "status", "ms", "type", "size", "size_unit",
+            "body_bytes", "has_body", "state", "failure")
+    return {k: entry.get(k) for k in keys if k in entry}
+
+
+def find_captured_request(
+    entries: list[dict],
+    pattern: str,
+    *,
+    after_id: int | None = None,
+) -> dict | None:
+    """Return the first captured entry matching ``pattern``.
+
+    ``pattern`` is a substring match, or a shell-style glob when it contains
+    ``*``. Entries are scanned oldest-first so repeated waits see new requests.
+    """
+    import fnmatch
+
+    glob = "*" in pattern
+    for entry in entries:
+        url = str(entry.get("url", ""))
+        if after_id is not None:
+            rid = entry.get("id")
+            if not isinstance(rid, int) or rid <= after_id:
+                continue
+        if (fnmatch.fnmatchcase(url, pattern) if glob else pattern in url):
+            return entry
+    return None
+
 
 
 @mcp.tool()
