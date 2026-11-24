@@ -435,20 +435,190 @@ async def wait_for(
     selector: str | None = None,
     url_pattern: str | None = None,
     timeout: int = 30000,
+    mode: str = "auto",
+    after_id: int | None = None,
+    poll_interval_ms: int = 100,
 ) -> dict:
-    """Wait for an element to appear or a network request matching a URL pattern."""
+    """Wait for an element, a captured network request, or a navigation.
+
+    Args:
+        selector: CSS selector to wait for.
+        url_pattern: URL substring (or shell-style glob when it contains
+            ``*``) used by request/navigation modes.
+        timeout: Max wait in milliseconds.
+        mode: Which condition ``url_pattern`` means.
+            "auto" (default) matches a captured request when network capture is
+            already running, otherwise falls back to navigation.
+            "request" only matches captured requests and reports a clear hint
+            when nothing arrives, so "the request never fired" is not confused
+            with "the page did not navigate".
+            "navigation" keeps the previous behaviour (page.wait_for_url).
+        after_id: Optional request id; only requests with a larger id match, so
+            an already-captured request cannot satisfy a later wait.
+        poll_interval_ms: Polling interval for request mode.
+
+    Returns:
+        dict with ``status`` plus ``mode``; request mode also returns the
+        matched request summary (``id``/``url``/``method``/``status``/``ms``).
+    """
     try:
+        if mode not in ("auto", "request", "navigation"):
+            return {"error": f"invalid mode: {mode}. Use auto/request/navigation"}
+        if timeout < 0:
+            return {"error": f"timeout must be >= 0, got {timeout}"}
+        if after_id is not None and after_id < 0:
+            return {"error": f"after_id must be >= 0, got {after_id}"}
+        if selector and url_pattern:
+            return {"error": "Provide either selector or url_pattern, not both"}
         page = await browser_manager.get_active_page()
         if selector:
             await page.wait_for_selector(selector, timeout=timeout)
-            return {"status": "found", "selector": selector}
-        elif url_pattern:
-            await page.wait_for_url(url_pattern, timeout=timeout)
-            return {"status": "matched", "url_pattern": url_pattern}
-        else:
+            return {"status": "found", "mode": "selector", "selector": selector}
+        if not url_pattern:
             return {"error": "Provide either selector or url_pattern"}
+
+        loop = asyncio.get_running_loop()
+        interval = max(int(poll_interval_ms), 10) / 1000.0
+        capturing_live = bool(getattr(browser_manager, "_capturing", False))
+
+        async def _poll_captured_request() -> dict | None:
+            deadline = loop.time() + (timeout / 1000.0)
+            while True:
+                match = find_captured_request(
+                    list(getattr(browser_manager, "_network_requests", []) or []),
+                    url_pattern,
+                    after_id=after_id,
+                    require_settled=True,
+                )
+                if match is not None:
+                    return match
+                if loop.time() >= deadline:
+                    return None
+                await asyncio.sleep(min(interval, max(0.005, deadline - loop.time())))
+
+        if mode == "request":
+            match = await _poll_captured_request()
+            if match is not None:
+                return {
+                    "status": "matched",
+                    "mode": "request",
+                    "url_pattern": url_pattern,
+                    "request": _request_summary(match),
+                }
+            return {
+                "error": f"Timeout {timeout}ms exceeded waiting for captured request matching {url_pattern!r}",
+                "status": "timeout",
+                "mode": "request",
+                "url_pattern": url_pattern,
+                "capture_active": capturing_live,
+                "hint": (
+                    "No captured request matched. Check that network_capture(action='start') "
+                    "is running, reproduce the action that should trigger the request, and use "
+                    "list_network_requests to confirm the URL. Pass mode='navigation' if you "
+                    "really meant to wait for a page navigation."
+                ),
+            }
+
+        if mode == "auto" and capturing_live:
+            req_task = asyncio.create_task(_poll_captured_request())
+            nav_task = asyncio.create_task(page.wait_for_url(url_pattern, timeout=timeout))
+            done, pending = await asyncio.wait(
+                {req_task, nav_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if nav_task in done and nav_task.exception() is None:
+                req_task.cancel()
+                await asyncio.gather(req_task, return_exceptions=True)
+                return {"status": "matched", "mode": "navigation", "url_pattern": url_pattern}
+            if req_task in done:
+                match = req_task.result()
+                if match is not None:
+                    nav_task.cancel()
+                    await asyncio.gather(nav_task, return_exceptions=True)
+                    return {
+                        "status": "matched",
+                        "mode": "request",
+                        "url_pattern": url_pattern,
+                        "request": _request_summary(match),
+                    }
+                # Request polling reached deadline; wait for remaining navigation task or propagate its error
+                await nav_task
+                return {"status": "matched", "mode": "navigation", "url_pattern": url_pattern}
+            # nav_task failed early while req_task is still polling within the shared timeout
+            match = await req_task
+            if match is not None:
+                return {
+                    "status": "matched",
+                    "mode": "request",
+                    "url_pattern": url_pattern,
+                    "request": _request_summary(match),
+                }
+            raise nav_task.exception()  # type: ignore[misc]
+
+        await page.wait_for_url(url_pattern, timeout=timeout)
+        return {"status": "matched", "mode": "navigation", "url_pattern": url_pattern}
     except Exception as e:
         return {"error": str(e)}
+
+
+def _request_summary(entry: dict) -> dict:
+    """Stable subset of a captured request for tool responses."""
+    body = entry.get("response_body")
+    body_bytes = entry.get("response_body_bytes")
+    if body_bytes is None and isinstance(body, str):
+        body_bytes = len(body.encode("utf-8", "replace"))
+    summary: dict = {
+        "id": entry.get("id"),
+        "url": entry.get("url"),
+        "method": entry.get("method"),
+        "status": entry.get("status"),
+        "ms": entry.get("ms") if "ms" in entry else entry.get("duration"),
+        "type": entry.get("type") if "type" in entry else entry.get("resource_type"),
+        "size": entry.get("size") if "size" in entry else (len(body) if isinstance(body, str) else 0),
+        "size_unit": entry.get("size_unit", "characters"),
+        "body_bytes": body_bytes,
+        "has_body": entry.get("has_body") if "has_body" in entry else (body is not None),
+        "body_state": entry.get("body_state"),
+        "body_truncated": bool(entry.get("response_body_capture_truncated", False)),
+        "state": entry.get("state"),
+    }
+    if entry.get("failure") is not None:
+        summary["failure"] = entry.get("failure")
+    return {k: v for k, v in summary.items() if v is not None or k in ("status", "ms")}
+
+
+def find_captured_request(
+    entries: list[dict],
+    pattern: str,
+    *,
+    after_id: int | None = None,
+    require_settled: bool = False,
+) -> dict | None:
+    """Return the first captured entry matching ``pattern``.
+
+    ``pattern`` is a substring match, or a shell-style glob when it contains
+    ``*`` or ``?``. Entries are scanned oldest-first so repeated waits see new
+    requests; when ``require_settled`` is true, in-flight entries with
+    ``state == 'pending'`` or ``body_state == 'pending'`` are skipped until
+    their response/body settles.
+    """
+    from ..debugger_rdp_tools import glob_match
+
+    is_glob = "*" in pattern or "?" in pattern
+    for entry in entries:
+        if require_settled and (
+            entry.get("state") == "pending" or entry.get("body_state") == "pending"
+        ):
+            continue
+        url = str(entry.get("url", ""))
+        if after_id is not None:
+            rid = entry.get("id")
+            if not isinstance(rid, int) or rid <= after_id:
+                continue
+        if (glob_match(pattern, url) if is_glob else pattern in url):
+            return entry
+    return None
+
 
 
 @mcp.tool()
