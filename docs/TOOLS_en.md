@@ -2,14 +2,14 @@
 
 [中文](TOOLS.md) | [English](TOOLS_en.md)
 
-42 tools in 10 groups. See the [README](../README_en.md) for installation and server options.
+43 tools in 10 groups. See the [README](../README_en.md) for installation and server options.
 
-- [Available Tools](#available-tools-42)
+- [Available Tools](#available-tools-43)
 - [Usage Scenarios](#usage-scenarios)
 - [Architecture](#architecture)
 - [Why Camoufox?](#why-camoufox)
 
-## Available Tools (42)
+## Available Tools (43)
 
 ### Browser Control
 | Tool | Description |
@@ -21,13 +21,13 @@
 | `take_screenshot` | Screenshot (full page or specific element) |
 | `take_snapshot` | Get accessibility tree (token-efficient) |
 | `click` / `type_text` | Click element / type text |
-| `wait_for` | Wait for element or URL pattern |
+| `wait_for` | Wait for an element, a page navigation URL pattern, or a settled captured network request (`mode="auto"` / `"request"` / `"navigation"`, optional `after_id`) |
 | `get_page_info` | Get current page URL, title, viewport, and frame list |
 
 ### JS Execution & Debugging
 | Tool | Description |
 |------|-------------|
-| `evaluate_js` | Evaluate JS in the compatible isolated world or an explicit page main world/frame |
+| `evaluate_js` | Evaluate JS in the compatible isolated world or an explicit page main world/frame; pass `output_file` (`output_encoding="utf8"` / `"base64"`) to persist large strings or binary blobs directly to disk and return preview + `sha256` |
 | `trace_session(action)` | Playwright trace recording: `start` (screenshots/snapshots/sources), `stop` writes a `.zip` to open in trace.playwright.dev or `playwright show-trace`, `status` reports state. Records the default browser context; relaunching the browser loses an unfinished recording |
 
 ### Script Analysis
@@ -52,6 +52,7 @@
 | `list_network_requests` | List captured requests (filter by URL / domain / method / type / status) |
 | `get_network_request` | Get full request details (`max_body_size` controls body truncation) |
 | `get_request_initiator` | Get JS call stack that initiated a request |
+| `extract_script` | Pull a script string out of a captured response (`json_path` walks dotted/bracketed JSON such as `data.data` or `items[0].script`, rejecting truncated bodies unless `allow_partial=True`); optional `output_file`. For fetch+eval SDKs: that code has no script resource, so source search and route rewriting cannot reach it |
 | `intercept_request` | Intercept requests: log / block / modify / mock / stop. `mock_response` takes `body` (inline text) or `body_file` (regular UTF-8 file <= 10 MiB, relative paths resolve against the server working directory, re-read per request in a worker thread; mutually exclusive — fulfilled responses are readable by page scripts, so never point `body_file` at credentials or private local files) |
 | `export_network_capture` | Export a versioned JSON snapshot; masks header and query values and omits bodies by default, never overwrites a file |
 | `compare_network_requests` | Compare 2 to 10 captured requests without sending requests or launching a browser |
@@ -138,7 +139,7 @@ instrumentation(
 ### Cookies & Storage
 | Tool | Description |
 |------|-------------|
-| `cookies(action)` | Cookie management: `get` / `set` / `delete` |
+| `cookies(action)` | Cookie management: `get` / `header` (RFC 6265-scoped `Cookie` header export by `url`/`domain`, with `0600` `output_file` persistence and redacted inline header) / `set` / `delete` |
 | `get_storage` | Get localStorage / sessionStorage |
 | `export_state` / `import_state` | Save / restore full browser state |
 

@@ -2,7 +2,7 @@
 
 [中文](TOOLS.md) | [English](TOOLS_en.md)
 
-共 42 个工具，按用途分 10 类。安装方式和启动参数见 [README](../README.md)。
+共 43 个工具，按用途分 10 类。安装方式和启动参数见 [README](../README.md)。
 
 - [可用工具一览](#可用工具一览)
 - [使用场景示例](#使用场景示例)
@@ -21,13 +21,13 @@
 | `take_screenshot` | 截图（支持全页面、指定元素） |
 | `take_snapshot` | 获取页面无障碍树（token 高效） |
 | `click` / `type_text` | 点击元素 / 输入文本 |
-| `wait_for` | 等待元素出现或 URL 匹配 |
+| `wait_for` | 等待元素出现、页面导航 URL 匹配或已捕获的网络请求收尾（`mode="auto"` / `"request"` / `"navigation"`，支持 `after_id` 游标） |
 | `get_page_info` | 获取当前页面 URL、标题、视口尺寸和 Frame 清单 |
 
 ### JS 执行与调试
 | 工具 | 说明 |
 |------|------|
-| `evaluate_js` | 执行 JS 表达式；默认隔离上下文，可显式选择主世界和目标 Frame |
+| `evaluate_js` | 执行 JS 表达式；默认隔离上下文，可显式选择主世界和目标 Frame；传 `output_file`（`output_encoding="utf8"` / `"base64"`）可把大字符串或二进制载荷直接安全落盘并返回摘要与 `sha256` |
 | `trace_session(action)` | Playwright 会话录制：`start` 开始（screenshots/snapshots/sources）、`stop` 导出 `.zip`（可用 trace.playwright.dev 或 `playwright show-trace` 打开）、`status` 查看状态。只记录默认浏览器上下文；重新启动浏览器后未停止的录制会丢失 |
 
 ### 脚本分析
@@ -52,6 +52,7 @@
 | `list_network_requests` | 列出已捕获的请求（支持 URL / 域名 / 方法 / 类型 / 状态码过滤） |
 | `get_network_request` | 获取请求完整详情（`max_body_size` 控制 body 截断） |
 | `get_request_initiator` | 获取请求发起的 JS 调用栈 |
+| `extract_script` | 从已捕获响应里取出一段脚本（按 `json_path` 走点分/下标路径，如 `data.data` 或 `items[0].script`，拦截截断响应体）；可写 `output_file`。用于 fetch+eval 型 SDK：这类代码没有 script 资源，源码搜索与路由改写都够不到 |
 | `intercept_request` | 拦截请求：log / block / modify / mock / stop。`mock_response` 支持 `body`（内联文本）或 `body_file`（≤10 MiB 的常规 UTF-8 文件，相对路径按服务器工作目录解析、每次请求在工作线程重读，两者互斥；注意响应内容对页面脚本可读，勿指向本地敏感凭据文件） |
 | `export_network_capture` | 导出带版本号的 JSON 快照；默认掩码请求头和查询参数、不含 body，不覆盖已有文件 |
 | `compare_network_requests` | 对比 2 到 10 个已捕获的请求，不发请求，也不需要启动浏览器 |
@@ -128,7 +129,7 @@ instrumentation(
 ### Cookie 与存储
 | 工具 | 说明 |
 |------|------|
-| `cookies(action)` | Cookie 管理：`get` / `set` / `delete` |
+| `cookies(action)` | Cookie 管理：`get` / `header`（按 URL/域名拼装 RFC 6265 `Cookie` 请求头，支持 `output_file` `0600` 落盘且不在上下文回显明文） / `set` / `delete` |
 | `get_storage` | 获取 localStorage / sessionStorage |
 | `export_state` / `import_state` | 导出 / 导入完整浏览器状态 |
 

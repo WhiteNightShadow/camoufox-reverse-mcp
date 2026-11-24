@@ -4,6 +4,20 @@
 
 Full notes for v1.1.1 and later are in [docs/releases](docs/releases) (Chinese). Packages are on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases).
 
+## v1.13.0 (2026-11-24) — Payload Script Extraction, Generic Evidence I/O, and Session Liveness
+
+- New `extract_script` tool (43 tools in total): extracts script payloads delivered via `fetch` + `eval` (which never register as `<script src>` resources) from captured responses or raw text using dotted/bracketed JSON paths (`data.data`, `items[0].script`, or `""` for raw script bodies) and persists them atomically via `utils/evidence.py`; rejects truncated `max_body_size` captures unless `allow_partial=True`, closing the loop with `instrumentation(action="rewrite_source")` + `intercept_request(mock_response={"body_file": ...})`
+- Generic atomic non-symlink evidence persistence (`utils/evidence.py`) and three core tool upgrades:
+  - `evaluate_js(output_file, output_encoding="utf8"|"base64", overwrite=False)`: pre-validates output path/encoding before JS side effects, enforces JS `string` results, sanitizes lone UTF-16 surrogates, validates strict Base64 (rejecting `data:` URLs), and writes directly to disk while returning only a short preview and `sha256`
+  - `cookies(action="header", url=..., domain=..., name=..., output_file=..., overwrite=False)`: builds RFC 6265-scoped `Cookie` headers (defaulting to the active `http(s)` page URL when `domain` is omitted); writes with `0600` permissions and redacts inline `header` (`None`) when `output_file` is supplied
+  - `wait_for(mode="auto"|"request"|"navigation", after_id=...)`: waits for settled captured network requests (non-`pending` response and body) matching a URL glob and returns normalized request summaries
+- Session liveness and initial-tab race fixes:
+  - `BrowserManager` shares `_select_usable_page()` across `get_active_page()` and `_session_is_usable()`, falling back to remaining open tabs when the active tab closes and automatically tearing down/relaunching dead sessions in `launch_browser` (`recovered_stale_session=True`, clearing stale routes); `check_environment` reports `usable` and per-page `closed` flags
+  - `rdp_debugger`: `enable()` now polls cancellation-aware `_wait_for_tabs()` up to 5s for freshly launched browsers registering their first tab, and `_wait_first_page()` returns immediately once a tab appears on `about:blank` launches
+- Thanks to [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) for contributing both PRs (#29 #30)
+
+See the [Chinese release notes](docs/releases/v1.13.0.md).
+
 ## v1.12.0 (2026-11-20) — Cross-Build Regex Injection, Disk Body Mocks, and Pattern Breakpoints
 
 - `instrumentation` gains `inject` (source-level regex insertion): `[{find, before|after, group}]` inserts statements around every match, expands `$1..$99`/`$0`, reports per-group counts in `inject.groups[]` / `status.inject_hits` / `log`, and combines with `tap_stage_calls` and `filter_*`. Four syntax-safety layers: `;` guards on both ends (including `}`-terminated expressions and `;\n...\n;` for `//` comments); per-site skipping inside string, nested `${...}` template, comment and regex literals (`i++/2`, `obj.return / 2` and `if (...) /re/` handled accurately); lexical `case`/`default` label shifting past ternary `? :` while ignoring `{default: ...}` object keys; and re-parse validation (`esprima` + local bundled Acorn for modern ES2025/ESM) with per-group fallback

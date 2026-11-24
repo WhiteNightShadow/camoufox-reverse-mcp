@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import time
-import asyncio
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 from ..utils.domains import domain_matches
+from ..utils.evidence import (
+    preview as _preview_evidence,
+    resolve_output_path,
+    sanitize_surrogates,
+    write_text_evidence,
+)
 
 from ..server import mcp, browser_manager
 from ..utils.worlds import evaluate_in_world
@@ -189,6 +196,144 @@ async def get_network_request(
                     result.pop("response_headers", None)
                 return result
         return {"error": f"Request ID {request_id} not found"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def extract_script(
+    request_id: int | None = None,
+    body: str | None = None,
+    json_path: str = "data.data",
+    output_file: str | None = None,
+    overwrite: bool = False,
+    allow_partial: bool = False,
+    preview_chars: int = 120,
+    max_inline_chars: int = 20000,
+) -> dict:
+    """Pull a script string out of a captured response and (optionally) save it.
+
+    Use this for SDK code that reaches the page through ``fetch`` + ``eval``
+    instead of a ``<script src>`` tag: such code has no script resource, so
+    source search cannot see it and route rewriting cannot reach it. Extract it
+    here, patch it locally, then serve the patched file back with
+    ``intercept_request(action="mock", mock_response={"body_file": ...})``.
+
+    Args:
+        request_id: Captured request to read ``response_body`` from. Requires the
+            body to have been captured (network_capture(capture_body=True)).
+        body: Raw response text to use instead of a captured request (mutually
+            exclusive with request_id).
+        json_path: Dotted/bracketed JSON path to the script string, e.g. ``data.data``
+            or ``items[0].script``. Pass an empty string when the body itself is
+            the script.
+        output_file: Write the extracted script here (UTF-8, regular file only).
+        overwrite: Allow replacing an existing output_file.
+        allow_partial: Allow extracting from a response body truncated by
+            ``network_capture(max_body_size=...)`` (default False).
+        preview_chars: Preview length in the response (never the whole script).
+        max_inline_chars: Refuse to inline a script larger than this; ask for
+            output_file instead.
+
+    Returns:
+        dict with ``chars``, ``sha256``, ``preview``, ``partial``, and, when written,
+        ``output`` = {path, bytes, sha256, encoding, chars}.
+    """
+    from ..utils.payload import PayloadExtractError, extract_json_path, looks_like_script
+
+    try:
+        if request_id is not None and body is not None:
+            return {"error": "Pass either request_id or body, not both"}
+        if request_id is None and body is None:
+            return {"error": "Provide request_id or body"}
+        if output_file is not None:
+            resolve_output_path(output_file, overwrite=overwrite)
+
+        partial = False
+        if body is None:
+            entry = next((r for r in browser_manager._network_requests
+                          if r.get("id") == request_id), None)
+            if entry is None:
+                return {"error": f"Request ID {request_id} not found in the capture buffer"}
+            body = entry.get("response_body")
+            body_state = entry.get("body_state")
+            if body is None:
+                hint = (
+                    "Response body is still arriving; wait for the request to settle before extracting."
+                    if body_state == "pending"
+                    else "Restart capture with network_capture(action='start', capture_body=True), "
+                    "reproduce the request, then retry."
+                )
+                return {
+                    "error": f"Request {request_id} has no captured response body",
+                    "body_state": body_state,
+                    "hint": hint,
+                }
+            partial = bool(
+                entry.get("response_body_capture_truncated", entry.get("response_body_truncated", False))
+            )
+            if partial and not allow_partial:
+                return {
+                    "error": f"Request {request_id} response body is truncated ({len(body)} chars captured)",
+                    "partial": True,
+                    "stored_chars": len(body),
+                    "original_chars": entry.get("response_body_total_size"),
+                    "hint": "Increase network_capture(max_body_size=...) and recapture, or pass allow_partial=True.",
+                }
+        if not isinstance(body, str):
+            return {"error": f"body must be text, got {type(body).__name__}"}
+
+        try:
+            raw_script = (
+                await asyncio.to_thread(extract_json_path, body, json_path)
+                if json_path
+                else body
+            )
+        except PayloadExtractError as exc:
+            return {
+                "error": str(exc),
+                "hint": "Check the JSON path with get_network_request(include_body=True); "
+                        "pass json_path='' when the body is already the script.",
+            }
+        if not raw_script.strip():
+            return {"error": "extracted script is empty"}
+
+        script, surrogates_replaced = sanitize_surrogates(raw_script)
+        clamped_preview = max(0, int(preview_chars))
+        warnings: list[str] = []
+        if surrogates_replaced > 0:
+            warnings.append(
+                f"Replaced {surrogates_replaced} lone UTF-16 surrogate code unit(s) with U+FFFD for UTF-8 safety."
+            )
+        if not looks_like_script(script):
+            warnings.append(
+                "Extracted text does not start with common JS syntax tokens; verify json_path if this is unexpected."
+            )
+
+        encoded_bytes = script.encode("utf-8")
+        result: dict[str, object] = {
+            "chars": len(script),
+            "sha256": hashlib.sha256(encoded_bytes).hexdigest(),
+            "preview": _preview_evidence(script, clamped_preview) if clamped_preview > 0 else "",
+            "json_path": json_path,
+            "partial": partial,
+        }
+        if warnings:
+            result["warnings"] = warnings
+        if output_file is not None:
+            target = await asyncio.to_thread(
+                write_text_evidence, output_file, script, overwrite=overwrite
+            )
+            result["output"] = target
+            return result
+        if len(script) > max_inline_chars:
+            result["error"] = (
+                f"script is {len(script)} chars (> max_inline_chars={max_inline_chars}); "
+                "pass output_file to save it instead of inlining"
+            )
+            return result
+        result["script"] = script
+        return result
     except Exception as e:
         return {"error": str(e)}
 

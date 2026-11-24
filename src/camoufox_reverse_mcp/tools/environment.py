@@ -52,10 +52,20 @@ async def check_environment() -> dict:
         browser = browser_manager.browser
         if browser is not None:
             connected = getattr(browser, "is_connected", None)
-            browser_state["running"] = bool(connected()) if callable(connected) else True
+            usable = await browser_manager._session_is_usable()
+            browser_state["running"] = (bool(connected()) if callable(connected) else True) and usable
+            browser_state["usable"] = usable
             browser_state["instance_id"] = getattr(browser_manager, "_browser_instance_id", None)
             browser_state["ownership"] = "attached" if browser_manager._connected else "owned"
-            pages = [{"name": name, "url": page.url} for name, page in browser_manager.pages.items()]
+            pages = []
+            for name, page in browser_manager.pages.items():
+                closed_fn = getattr(page, "is_closed", None)
+                is_closed = bool(closed_fn()) if callable(closed_fn) else False
+                try:
+                    page_url = page.url
+                except Exception:
+                    page_url = "unknown"
+                pages.append({"name": name, "url": page_url, "closed": is_closed})
             browser_state["pages"] = pages
             browser_state["page_count"] = len(pages)
             browser_state["persistent_scripts_count"] = len(browser_manager._persistent_scripts)

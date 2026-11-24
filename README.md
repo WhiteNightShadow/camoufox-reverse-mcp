@@ -77,8 +77,8 @@ python -m camoufox fetch
 先安装 [uv](https://docs.astral.sh/uv/getting-started/installation/) 和 git，再在终端各运行一次：
 
 ```bash
-uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.12.0" camoufox-reverse-mcp --version
-uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.12.0" camoufox fetch
+uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.0" camoufox-reverse-mcp --version
+uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.0" camoufox fetch
 ```
 
 第一条下载依赖并确认版本，可以避免客户端首次启动时等待超时。第二条下载浏览器，保存在用户缓存目录，不随 uvx 环境清理。
@@ -92,7 +92,7 @@ uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.12.0",
+        "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.0",
         "camoufox-reverse-mcp"
       ]
     }
@@ -103,18 +103,18 @@ uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.
 Claude Code 也可以用一条命令添加：
 
 ```bash
-claude mcp add --scope user camoufox-reverse -- uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.12.0" camoufox-reverse-mcp
+claude mcp add --scope user camoufox-reverse -- uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.0" camoufox-reverse-mcp
 ```
 
 <details>
 <summary>更新版本与常驻安装</summary>
 
-**更新版本**：在 [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases) 查看最新标签，把配置里的 `@v1.12.0` 改成新标签，再重启客户端。标签是固定的，不改就不会变。去掉 `@v1.12.0` 会在每次启动时跟随 main 的最新提交，不建议在日常使用时这样配置。如果 `check_environment` 提示缺少浏览器，用新标签再运行一次 `camoufox fetch`。
+**更新版本**：在 [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases) 查看最新标签，把配置里的 `@v1.13.0` 改成新标签，再重启客户端。标签是固定的，不改就不会变。去掉 `@v1.13.0` 会在每次启动时跟随 main 的最新提交，不建议在日常使用时这样配置。如果 `check_environment` 提示缺少浏览器，用新标签再运行一次 `camoufox fetch`。
 
 **常驻安装**：配置里的 `command` 写 `camoufox-reverse-mcp`，不需要 `args`。浏览器仍用上面的 `uvx ... camoufox fetch` 下载，两种方式共用同一份浏览器。
 
 ```bash
-uv tool install "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.12.0"
+uv tool install "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.0"
 uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@<新标签>"
 ```
 
@@ -134,7 +134,7 @@ uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-revers
 
 ## 工具
 
-共 42 个工具，分 10 类。参数说明和使用场景见[工具参考](docs/TOOLS.md)。
+共 43 个工具，分 10 类。参数说明和使用场景见[工具参考](docs/TOOLS.md)。
 
 | 类别 | 数量 | 用途 |
 |---|---:|---|
@@ -142,7 +142,7 @@ uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-revers
 | [JS 执行与调试](docs/TOOLS.md#js-执行与调试) | 2 | 在隔离上下文或页面主世界执行 JS，录制可回放的会话 |
 | [脚本分析](docs/TOOLS.md#脚本分析) | 2 | 列出、读取、保存脚本，搜索代码 |
 | [Hook 与追踪](docs/TOOLS.md#hook-与追踪) | 5 | 函数 Hook 和 Trace、预置 Hook、控制台日志 |
-| [网络分析](docs/TOOLS.md#网络分析) | 8 | 抓包、拦截、发起调用栈、请求对比、导出 |
+| [网络分析](docs/TOOLS.md#网络分析) | 9 | 抓包、拦截、发起调用栈、请求对比、导出 |
 | [JSVMP 逆向分析](docs/TOOLS.md#jsvmp-逆向分析) | 4 | 运行时探针、源码插桩、状态级深挖、环境指纹采集与导出 |
 | [Firefox RDP 断点调试](docs/TOOLS.md#firefox-rdp-断点调试) | 1 | 真断点、单步、调用栈、作用域、暂停中求值、请求断点（走 Firefox 原生 RDP，不需要 CDP） |
 | [Cookie 与存储](docs/TOOLS.md#cookie-与存储) | 4 | Cookie、Storage、浏览器状态导入导出 |
@@ -183,6 +183,7 @@ uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-revers
 
 ## 更新记录
 
+- **v1.13.0**（2026-11-24）：新增 `extract_script`（从 `fetch`+`eval` 响应 JSON 中按路径提取脚本并落盘，工具扩充为 43 个）；`evaluate_js` 新增 `output_file`（UTF-8 / Base64 安全落盘）；`cookies(action="header")` 支持按 URL/域名拼装 RFC 6265 `Cookie` 头并以 `0600` 权限落盘；`wait_for` 新增 `mode="request"` 等待已捕获请求收尾；修复死浏览器句柄误报 `already_running` 与 `rdp_debugger` 首标签页竞态。[详情](docs/releases/v1.13.0.md)
 - **v1.12.0**（2026-11-20）：`instrumentation` 新增 `inject` 源码级正则插桩（跨构建打点，支持现代语法校验、模板/字面量跳过与 `case` 标签偏移）；`intercept_request` 支持 `mock_response.body_file` 按请求重读大体积脚本；`rdp_debugger` 支持 `url_pattern` + `find` 正则断点跨刷新自动重算重下。[详情](docs/releases/v1.12.0.md)
 - **v1.11.1**（2026-11-15）：修复 Windows CI 下两条 POSIX Unix socket 路径测试未跳过的问题，并对齐自动发布流水线校验。[详情](docs/releases/v1.11.1.md)
 - **v1.11.0**（2026-11-15）：新增 `rdp_debugger`，走 Firefox 原生 RDP 补齐真断点、单步、调用栈、作用域、暂停帧求值与请求前断点；与 `launch_browser` 共用指纹/代理/激活版本配置，支持 macOS/Linux 0700 Unix socket，工具扩充为 42 个。[详情](docs/releases/v1.11.0.md)
@@ -193,7 +194,7 @@ uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-revers
 
 - [@tuntun1337](https://github.com/tuntun1337) — 严格 JSON Schema 兼容性
 - [@Code-xy](https://github.com/Code-xy) — Windows 引擎追踪问题定位与验证
-- [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP 执行点关联需求与分析材料，`instrumentation` 的 `tap_stage_calls` 阶段插桩与 `inject` 源码级正则插桩，`stage_break` 与 `trace_session`，`intercept_request` 的 `body_file` 磁盘替换，`rdp_debugger` Firefox RDP 断点调试及跨刷新正则定位，以及 v1.10.0 处理的 #19–#25 问题报告
+- [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP 执行点关联需求与分析材料，`instrumentation` 的 `tap_stage_calls` 阶段插桩与 `inject` 源码级正则插桩，`stage_break` 与 `trace_session`，`intercept_request` 的 `body_file` 磁盘替换，`extract_script` 载荷脚本提取与通用证据落盘（`evaluate_js` / `cookies` / `wait_for`），死会话自愈与 `rdp_debugger` Firefox RDP 断点调试，以及 v1.10.0 处理的 #19–#25 问题报告
 - [@dsaw1111](https://github.com/dsaw1111) — Camoufox 152 版本差距与 PropertyTracer 升级需求
 - [@chung1912](https://github.com/chung1912) — `uvx` 安装建议与 `uv tool install` 配置
 - [@tunguyen1993](https://github.com/tunguyen1993) — `hook_jsvmp_interpreter` 的 `script_url` 转义问题与修复建议

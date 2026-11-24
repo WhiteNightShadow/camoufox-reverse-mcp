@@ -1309,15 +1309,16 @@ class FireFoxDebugger:
             self.launch_info = info
             if wait_page:
                 try:
-                    self._wait_first_page(wait_page)
+                    self._wait_first_page(wait_page, target_url=url)
                 except Exception:
                     self.close()
                     raise
             return info
 
-    def _wait_first_page(self, wait_page: float) -> None:
-        """等第一个标签页离开 about:blank（比固定 sleep 更稳），再留一点加载时间。"""
+    def _wait_first_page(self, wait_page: float, target_url: str = "about:blank") -> None:
+        """等第一个标签页就绪（非空白 URL 则等待离开 about:blank），再确认至少有一个可用 tab。"""
         end = time.monotonic() + wait_page
+        expect_navigation = str(target_url or "").strip() not in ("", "about:blank")
         while time.monotonic() < end:
             if self._cancel.is_set():
                 raise RdpError("RDP 启动已取消")
@@ -1327,12 +1328,28 @@ class FireFoxDebugger:
                 if self._cancel.is_set():
                     raise RdpError("RDP 启动已取消")
                 break
-            if any(str(t.get("url") or "") not in ("", "about:blank") for t in tabs):
+            if tabs and not expect_navigation:
+                break
+            if expect_navigation and any(str(t.get("url") or "") not in ("", "about:blank") for t in tabs):
                 break
             if self._cancel.wait(0.1):
                 raise RdpError("RDP 启动已取消")
-        if self._cancel.wait(min(0.3, wait_page)):
+        if expect_navigation and self._cancel.wait(min(0.3, wait_page)):
             raise RdpError("RDP 启动已取消")
+        if self._cancel.is_set():
+            raise RdpError("RDP 启动已取消")
+        try:
+            final_tabs = (self.rdp.call({"to": "root", "type": "listTabs"}, 10) or {}).get("tabs") or []
+        except (RdpError, OSError):
+            if self._cancel.is_set():
+                raise RdpError("RDP 启动已取消")
+            final_tabs = []
+        if not final_tabs:
+            endpoint_desc = f"unix_socket={self.unix_path}" if getattr(self, "unix_path", None) else f"port={self.port}"
+            raise RdpError(
+                f"RDP launch produced no usable tab ({endpoint_desc}, waited={wait_page}s); "
+                "failed session was closed. Retry launch with a larger wait_page or check executable/display."
+            )
 
     def attach(self, port: int | None = None, unix_path: str | None = None,
                timeout: float = 20.0) -> dict:
@@ -1427,6 +1444,34 @@ class FireFoxDebugger:
         except (RdpError, OSError):
             return False
 
+    def _wait_for_tabs(self, rdp, timeout: float = 5.0) -> list:
+        """Poll listTabs until at least one tab exists (or timeout), honoring cancellation.
+
+        A freshly launched browser can accept the RDP connection before it
+        registers its first tab; polling avoids failing with "no tabs" in that window.
+        """
+        end = time.monotonic() + max(timeout, 0.0)
+        cancel = getattr(self, "_cancel", None)
+        tabs: list = []
+        while True:
+            if cancel is not None and cancel.is_set():
+                raise RdpError("rdp operation cancelled")
+            remaining = end - time.monotonic()
+            call_timeout = max(0.1, min(5.0, remaining)) if timeout > 0 else 1.0
+            try:
+                tabs = (rdp.call({"to": "root", "type": "listTabs"}, call_timeout) or {}).get("tabs") or []
+            except (RdpError, OSError):
+                if cancel is not None and cancel.is_set():
+                    raise RdpError("rdp operation cancelled")
+                tabs = []
+            if tabs or time.monotonic() >= end:
+                return tabs
+            if cancel is not None:
+                if cancel.wait(0.1):
+                    raise RdpError("rdp operation cancelled")
+            else:
+                time.sleep(0.1)
+
     def enable(self, url_substr: str | None = None, target_type: str = "frame") -> dict:
         """tab → target form → threadActor → attach。
 
@@ -1437,7 +1482,7 @@ class FireFoxDebugger:
         with self._op():
             rdp = self._require_rdp()
             old_target, old_thread = self.target, self.thread
-            tabs = (rdp.call({"to": "root", "type": "listTabs"}, 25) or {}).get("tabs") or []
+            tabs = self._wait_for_tabs(rdp)
             if not tabs:
                 raise RdpError("浏览器里没有标签页")
             tab = self._pick_tab(tabs, url_substr)
