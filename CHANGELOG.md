@@ -4,6 +4,20 @@
 
 v1.1.1 起每个版本的完整说明在 [docs/releases](docs/releases)，发布包在 [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases)。
 
+## v1.13.0（2026-11-24）— 载荷脚本提取、通用证据落盘与死会话自愈
+
+- 新增 `extract_script`（第 43 个 MCP 工具）：针对经 `fetch` + `eval` 下发而无独立 `<script src>` 资源的动态 SDK，支持从已捕获响应或原始文本按点分/下标 JSON 路径（如 `data.data`、`items[0].script`，传空串表示整份响应即脚本）提取源码并经 `utils/evidence.py` 安全落盘；默认拦截被 `max_body_size` 截断的半截响应体（`allow_partial=False`），配合 `instrumentation(action="rewrite_source")` + `intercept_request(mock_response={"body_file": ...})` 闭环离线打点与热替换
+- 新增通用证据安全落盘模块 `utils/evidence.py` 及三项核心工具增强：
+  - `evaluate_js(output_file, output_encoding="utf8"|"base64", overwrite=False)`：执行前预校验目标路径与编码，严格校验 JS 返回类型为 `string`，清洗孤立 UTF-16 代理项并拦截 `data:` URL / 非法 Base64，直接原子落盘大体积源码或字节码，仅向对话返回短预览与 `sha256`
+  - `cookies(action="header", url=..., domain=..., name=..., output_file=..., overwrite=False)`：默认按当前 `http(s)` 页面 URL（或显式 `url`/`domain`）走 RFC 6265 路径长度排序与过期过滤生成标准 `Cookie` 请求头；指定 `output_file` 时以 `0600` 权限落盘且在工具返回中将 `header` 置为 `None`，防止会话凭据刷入上下文
+  - `wait_for(mode="auto"|"request"|"navigation", after_id=...)`：支持按 URL glob 等待已捕获网络请求及其响应体收尾（`state` 与 `body_state` 非 `pending`），返回与 `list_network_requests` 一致的请求摘要
+- 会话存活性与首标签页竞态修复：
+  - `BrowserManager` 统一通过 `_select_usable_page()` 校验活跃标签页并自动从已打开的上下文标签页回退修复；浏览器断开或全部标签页关闭时，`launch_browser` 自动清理失效路由/状态并重建会话（返回 `recovered_stale_session=True`），消除 `already_running` 与死句柄之间的循环卡死；`check_environment` 同步报告 `usable` 与单页 `closed` 状态
+  - `rdp_debugger`：`enable()` 改为调用支持取消信号的 `_wait_for_tabs()`（最多轮询 5s 等待刚启动浏览器的首个标签页注册），`_wait_first_page()` 在 `about:blank` 目标下见到可用标签页即返回并在最终无标签页时清理失败进程后报出明确诊断
+- 感谢 [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) 贡献这两组通用证据闭环与会话健壮性改进（#29 #30）
+
+详情见 [v1.13.0](docs/releases/v1.13.0.md)。
+
 ## v1.12.0（2026-11-20）— 跨 build 正则插桩、磁盘文件 Mock 与动态正则断点
 
 - `instrumentation` 新增 `inject`（源码级正则插桩）：`[{find, before|after, group}]`，对每个匹配在起点前 / 结束点后插入语句，`$1..$99`/`$0` 引用捕获组，每组插入与原始匹配次数在 `inject.groups[]`、`status.inject_hits`、`log` 里可见，与 `tap_stage_calls`、`filter_*` 同时可用。四层语法保护：首尾 `;` 语句包裹（含 `}` 结尾与 `;\n…\n;` 行注释保护）；命中落在字符串/模板（含 `${...}` 嵌套）/注释/正则字面量（区分 `i++/2`、`obj.return / 2` 与 `if (...) /re/`）里时逐处跳过并报 `skipped_insertions`；`before` 落在 `switch` 的 `case`/`default` 标签前时词法跳过三元 `? :` 自动挪到冒号后（`label_shift`），排除 `{default: ...}` 对象属性；原脚本可解析（`esprima` + 本地随包 Acorn 支持现代 ES2025/ESM）时重解析校验并逐组回退

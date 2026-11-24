@@ -77,11 +77,51 @@ class BrowserManager:
         self._trace_started_at: float | None = None
         self._trace_action_lock = asyncio.Lock()
 
+    @staticmethod
+    def _page_is_open(page: Any) -> bool:
+        if page is None:
+            return False
+        closed = getattr(page, "is_closed", None)
+        if not callable(closed):
+            return True
+        try:
+            return not closed()
+        except Exception:
+            return True
+
+    def _select_usable_page(self) -> Page | None:
+        """Return an open active page, repairing active_page_name from open tabs if needed."""
+        active = self.pages.get(self.active_page_name) if self.active_page_name else None
+        if self._page_is_open(active):
+            return active
+        for name, page in list(self.pages.items()):
+            if not self._page_is_open(page):
+                self.pages.pop(name, None)
+        for name, page in self.pages.items():
+            if self._page_is_open(page):
+                self.active_page_name = name
+                return page
+        for ctx_name, ctx in list(self.contexts.items()):
+            ctx_pages = getattr(ctx, "pages", None)
+            if not isinstance(ctx_pages, (list, tuple)):
+                continue
+            for page in ctx_pages:
+                if self._page_is_open(page):
+                    try:
+                        self._attach_listeners(page)
+                    except Exception:
+                        pass
+                    target_name = self.active_page_name or ctx_name or "default"
+                    self.pages[target_name] = page
+                    self.active_page_name = target_name
+                    return page
+        return None
+
     async def _session_is_usable(self) -> bool:
         """True unless the handle is *definitively* dead.
 
         Only a definitive signal marks the session dead: ``is_connected()``
-        returning False, or every page reporting ``is_closed() == True``.
+        returning False, or every tracked/context page reporting ``is_closed() == True``.
         Objects without those methods (fakes, older Playwright) count as alive,
         so this check never turns a usable session into a relaunch.
         """
@@ -94,19 +134,12 @@ class BrowserManager:
                     return False
             except Exception:
                 pass
-        pages = [p for p in list(self.pages.values()) if p is not None]
-        if not pages:
+        has_any_tracked = any(p is not None for p in self.pages.values()) or any(
+            bool(getattr(ctx, "pages", None)) for ctx in self.contexts.values()
+        )
+        if not has_any_tracked:
             return True  # nothing tracked yet; do not claim it is dead
-        for page in pages:
-            closed = getattr(page, "is_closed", None)
-            if not callable(closed):
-                return True
-            try:
-                if not closed():
-                    return True
-            except Exception:
-                return True
-        return False
+        return self._select_usable_page() is not None
 
     async def launch(self, config: dict | None = None) -> dict:
         """Launch the Camoufox browser with the given or default config."""
@@ -117,11 +150,24 @@ class BrowserManager:
             # "Target page, context or browser has been closed".
             self._recovered_stale_session = True
             try:
+                from .tools import instrumentation as _inst
+
+                _inst._active_routes.clear()
+                _inst._source_site_registry.clear()
+            except Exception:
+                pass
+            try:
                 await self.close()
             except Exception:
                 self.browser = None
+                self._pw = None
+                self._cm = None
+                self._connected = False
+                self._capturing = False
+                self._browser_instance_id = None
                 self.pages.clear()
                 self.contexts.clear()
+                self.active_page_name = None
         if self.browser is not None:
             pages_info = {}
             for name, p in self.pages.items():
@@ -342,6 +388,10 @@ class BrowserManager:
                 "content processes can write the private trace run; use it only for "
                 "short analysis sessions."
             )
+        if self._recovered_stale_session:
+            trace_warnings.append(
+                "Recovered from a dead browser session; previous in-memory captures, routes, and hooks were reset."
+            )
         if trace_warnings:
             result["warnings"] = trace_warnings
         return result
@@ -405,21 +455,29 @@ class BrowserManager:
 
         result = {
             "status": "connected",
+            "recovered_stale_session": bool(getattr(self, "_recovered_stale_session", False)),
             "ws_endpoint": ws_endpoint,
             "contexts": list(self.contexts.keys()),
             "pages": list(self.pages.keys()),
         }
         # Persistent scripts only run on the NEXT navigation; if we attached to a page
         # already on a real site, existing hooks aren't live yet — tell the caller.
+        warnings: list[str] = []
+        if getattr(self, "_recovered_stale_session", False):
+            warnings.append(
+                "Recovered from a dead browser session; previous in-memory captures, routes, and hooks were reset."
+            )
         try:
             current = page.url
         except Exception:
             current = ""
         if current and current != "about:blank":
-            result["warnings"] = [
+            warnings.append(
                 f"attached to a page already at {current}; persistent scripts and hooks "
                 "apply on the next navigation — call reload() to activate them now."
-            ]
+            )
+        if warnings:
+            result["warnings"] = warnings
         return result
 
     async def _ensure_browser(self) -> None:
@@ -683,16 +741,9 @@ class BrowserManager:
     async def get_active_page(self) -> Page:
         """Get the currently active page, launching the browser if needed."""
         await self._ensure_browser()
-        page = self.pages.get(self.active_page_name) if self.active_page_name else None
+        page = self._select_usable_page()
         if page is not None:
-            closed = getattr(page, "is_closed", None)
-            if not callable(closed):
-                return page
-            try:
-                if not closed():
-                    return page
-            except Exception:
-                return page
+            return page
         raise RuntimeError(
             "No active page available (dead session detected). Call launch_browser() again; "
             "it now detects the stale handle and relaunches instead of reporting already_running."

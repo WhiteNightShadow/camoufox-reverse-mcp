@@ -150,3 +150,65 @@ def test_wait_first_page_raises_when_no_tab_appears():
 def test_wait_first_page_returns_when_a_tab_exists():
     dbg = _debugger_with(_OneTabRdp())
     dbg._wait_first_page(0.2)  # must not raise
+
+
+def test_active_page_fallback_repairs_closed_active_tab():
+    mgr = BrowserManager()
+
+    async def _ensure():
+        return None
+
+    mgr._ensure_browser = _ensure  # type: ignore[assignment]
+    open_page = _Page(closed=False)
+    mgr.pages = {"default": open_page, "secondary": _Page(closed=True)}
+    mgr.active_page_name = "secondary"
+    mgr.browser = _Browser(connected=True)
+
+    assert asyncio.run(mgr._session_is_usable()) is True
+    resolved = asyncio.run(mgr.get_active_page())
+    assert resolved is open_page
+    assert mgr.active_page_name == "default"
+    assert "secondary" not in mgr.pages
+
+
+def test_enable_uses_wait_for_tabs_and_respects_cancel():
+    import threading
+
+    class _EnableRdp:
+        def __init__(self):
+            self.list_calls = 0
+
+        def call(self, request, timeout):
+            t = request.get("type")
+            if t == "listTabs":
+                self.list_calls += 1
+                if self.list_calls < 3:
+                    return {"tabs": []}
+                return {"tabs": [{"actor": "tabA", "url": "https://example.test/", "title": "t"}]}
+            if t == "getTarget":
+                return {"frame": {"actor": "frameA", "consoleActor": "conA", "threadActor": "thA"}}
+            if t == "attach":
+                return {"type": "paused"}
+            if t == "isAttached":
+                return {"value": True}
+            if t == "resume":
+                return {}
+            return {}
+
+        def mark(self):
+            return 0
+
+        def wait_event(self, pred, timeout=0):
+            return None
+
+    dbg = FireFoxDebugger()
+    dbg.rdp = _EnableRdp()  # type: ignore[assignment]
+    info = dbg.enable()
+    assert info["tab"] == "tabA"
+    assert dbg.rdp.list_calls == 3
+
+    cancelled_dbg = object.__new__(FireFoxDebugger)
+    cancelled_dbg._cancel = threading.Event()
+    cancelled_dbg._cancel.set()
+    with pytest.raises(RdpError, match="cancelled"):
+        cancelled_dbg._wait_for_tabs(_FakeRdp([[]]), timeout=1.0)
