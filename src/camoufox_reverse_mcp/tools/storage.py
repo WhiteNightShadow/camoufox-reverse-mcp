@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-import re
+import asyncio
 import inspect
 import os
+import re
+import time
 
 from ..server import mcp, browser_manager
+from ..utils.evidence import resolve_output_path, write_text_evidence
 from ..utils.domains import domain_matches
 
 
@@ -14,6 +17,9 @@ async def cookies(
     domain: str | None = None,
     cookies_list: list[dict] | None = None,
     name: str | None = None,
+    url: str | None = None,
+    output_file: str | None = None,
+    overwrite: bool = False,
 ) -> dict | list:
     """Cookie management (v0.9.0 unified).
 
@@ -21,27 +27,84 @@ async def cookies(
 
     Args:
         action:
-          "get"   — return cookies (optionally filtered by domain)
-          "set"   — set cookies (requires cookies_list: [{name, value, domain, ...}])
+          "get"    — return cookies (optionally filtered by url, domain, and/or name)
+          "header" — build a ready-to-use ``Cookie:`` header value (deduplicated by name)
+          "set"    — set cookies (requires cookies_list: [{name, value, domain, ...}])
           "delete" — delete cookies (filter by name and/or domain; no filter = clear all)
-        domain: Host or parent domain for get/delete (boundary match, includes subdomains).
-            With name, both filters must match. No filters deletes all cookies.
+        domain: Host or parent domain for get/header/delete (boundary match, includes subdomains).
+            With name, both filters must match. No filters on delete clears all cookies.
         cookies_list: List of cookie dicts for "set".
-        name: Cookie name filter for "delete".
+        name: Optional exact cookie name filter for get/header/delete.
+        url: Optional request URL for get/header so Playwright applies RFC 6265
+            domain, path, Secure, and expiry matching. When action="header" is called
+            without url or domain on an http(s) page, defaults to the active page URL.
+        output_file: For action="header", write the Cookie header to this file (mode 0600)
+            and omit the raw header string from the inline tool response.
+        overwrite: Allow replacing an existing output_file.
 
     Returns:
         For "get": list of cookie dicts.
+        For "header": {"action", "count", "names", "header", "domain", "url"}
+            plus "output": {path, bytes, sha256, ...} (with "header": None) when output_file is used.
         For "set"/"delete": dict with status and count.
     """
     try:
+        if output_file is not None:
+            if action != "header":
+                return {"error": "output_file is only supported for action='header'"}
+            resolve_output_path(output_file, overwrite=overwrite, create_parents=False)
+
         page = await browser_manager.get_active_page()
         ctx = page.context
 
         if action == "get":
-            all_cookies = await ctx.cookies()
+            all_cookies = await (ctx.cookies([url]) if url else ctx.cookies())
             if domain:
                 all_cookies = [c for c in all_cookies if domain_matches(c.get("domain", ""), domain)]
+            if name:
+                all_cookies = [c for c in all_cookies if c.get("name") == name]
             return all_cookies
+
+        elif action == "header":
+            effective_url = url
+            if not effective_url and not domain:
+                page_url = getattr(page, "url", "") or ""
+                if page_url.startswith(("http://", "https://")):
+                    effective_url = page_url
+            all_cookies = await (ctx.cookies([effective_url]) if effective_url else ctx.cookies())
+            if domain:
+                now = time.time()
+                all_cookies = [
+                    c for c in all_cookies
+                    if domain_matches(c.get("domain", ""), domain)
+                    and not (isinstance(c.get("expires"), (int, float)) and 0 < c["expires"] < now)
+                ]
+                all_cookies.sort(
+                    key=lambda c: (
+                        -len(str(c.get("path") or "/")),
+                        -len(str(c.get("domain") or "").lstrip(".")),
+                    )
+                )
+            if name:
+                all_cookies = [c for c in all_cookies if c.get("name") == name]
+            header, used = build_cookie_header(all_cookies)
+            result: dict = {
+                "action": "header",
+                "count": len(used),
+                "names": [c.get("name") for c in used],
+                "header": None if output_file is not None else header,
+                "domain": domain,
+                "url": effective_url,
+            }
+            if output_file is not None:
+                result["output"] = await asyncio.to_thread(
+                    write_text_evidence,
+                    output_file,
+                    header,
+                    overwrite=overwrite,
+                    mode=0o600,
+                )
+            return result
 
         elif action == "set":
             if not cookies_list:
@@ -75,7 +138,7 @@ async def cookies(
             return {"status": "deleted", "count": len(selected)}
 
         else:
-            return {"error": f"unknown action: {action}. Use get/set/delete"}
+            return {"error": f"unknown action: {action}. Use get/header/set/delete"}
     except Exception as e:
         return {"error": str(e)}
 
@@ -161,3 +224,27 @@ async def import_state(state_path: str) -> dict:
         return {"status": "imported", "context": ctx_name, "path": state_path}
     except Exception as e:
         return {"error": str(e)}
+
+
+def build_cookie_header(cookies: list[dict]) -> tuple[str, list[dict]]:
+    """Join cookies into one ``Cookie:`` header value safely.
+
+    Duplicates (same name, different domain/path) keep the first occurrence, so
+    deterministic ordering is preserved; entries with control characters or
+    invalid names are skipped to prevent HTTP header injection.
+    """
+    ctl_re = re.compile(r"[\x00-\x1f\x7f]")
+    seen: set[str] = set()
+    used: list[dict] = []
+    pairs: list[str] = []
+    for c in cookies:
+        raw_name = c.get("name")
+        if not isinstance(raw_name, str) or not raw_name or raw_name in seen:
+            continue
+        raw_val = "" if c.get("value") is None else str(c.get("value"))
+        if ctl_re.search(raw_name) or ";" in raw_name or "=" in raw_name or ctl_re.search(raw_val):
+            continue
+        seen.add(raw_name)
+        used.append(c)
+        pairs.append(f"{raw_name}={raw_val}")
+    return "; ".join(pairs), used
