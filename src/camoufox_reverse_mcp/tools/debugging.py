@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import base64 as _b64
+
 from ..server import mcp, browser_manager
-from ..utils.evidence import preview, write_bytes_evidence, write_text_evidence
+from ..utils.evidence import (
+    preview,
+    resolve_output_path,
+    sanitize_surrogates,
+    write_bytes_evidence,
+)
 from ..utils.frames import resolve_frame
 from ..utils.worlds import evaluate_in_world
 
@@ -159,9 +167,11 @@ async def evaluate_js(
 
     Returns:
         dict with keys:
-          value       - cleaned value (parsed JSON if applicable)
+          value       - cleaned value (parsed JSON if applicable; None when output_file is used)
           value_raw   - raw string before cleaning (only when cleaning applied)
-          type        - "primitive" | "json" | "handle_fallback" | "error"
+          type        - "primitive" | "json" | "json_ascii" | "file" | "handle_fallback" | "error"
+          output      - (file only) {path, bytes, sha256, encoding}
+          preview     - (file only) bounded single-line preview of the string result
           world       - selected execution world
           frame       - selected frame's current snapshot metadata
           execution_backend - isolated, Camoufox native, or wrappedJSObject
@@ -249,6 +259,17 @@ async def evaluate_js(
     try:
         if result_format not in ("auto", "json_ascii"):
             return _decorate(_build_error_response("result_format must be auto or json_ascii"))
+        if output_file is not None:
+            if output_encoding not in ("utf8", "base64"):
+                return _decorate(_build_error_response("output_encoding must be utf8 or base64"))
+            if result_format == "json_ascii" and output_encoding != "utf8":
+                return _decorate(_build_error_response(
+                    "result_format='json_ascii' only supports output_encoding='utf8'"
+                ))
+            try:
+                resolve_output_path(output_file, overwrite=overwrite, create_parents=False)
+            except Exception as exc:
+                return _decorate(_build_error_response(f"invalid output_file: {exc}"))
         page = await browser_manager.get_active_page()
         target, frame_info = resolve_frame(
             page,
@@ -278,25 +299,51 @@ async def evaluate_js(
         # The JS wrapper now explicitly returns {result: null, type: "undefined"/"object"}
         # for undefined/null values instead of crashing on JSON.parse(JSON.stringify(undefined))
         result_val = raw.get("result") if isinstance(raw, dict) else raw
+        js_type = raw.get("type") if isinstance(raw, dict) else None
+        js_value_type = js_type
+        warnings_list: list[str] = []
 
         # Generic evidence out: large string results (page blobs, device state,
         # rendered documents) go straight to disk instead of the conversation.
-        if output_file:
-            if not isinstance(result_val, str):
-                return _decorate(_build_error_response(
-                    "output_file requires the expression to return a string; "
-                    f"got {type(result_val).__name__}. Wrap it, e.g. "
-                    "JSON.stringify(value) or btoa(String.fromCharCode(...bytes))."
-                ))
-            if output_encoding not in ("utf8", "base64"):
-                return _decorate(_build_error_response(
-                    "output_encoding must be utf8 or base64"
-                ))
+        if output_file is not None:
+            if result_format == "json_ascii":
+                if not isinstance(result_val, str) or not (isinstance(raw, dict) and raw.get("json_ascii")):
+                    return _decorate(_build_error_response(
+                        "ASCII JSON transport did not return its result marker; expression was not replayed"
+                    ))
+            else:
+                has_ser_fallback = isinstance(raw, dict) and bool(raw.get("serialization_warning"))
+                if js_type != "string" or not isinstance(result_val, str) or has_ser_fallback:
+                    actual_type = js_type or type(result_val).__name__
+                    return _decorate(_build_error_response(
+                        "output_file requires the expression to return a string; "
+                        f"got {actual_type}. Wrap it, e.g. "
+                        "JSON.stringify(value) or btoa(Array.from(bytes, b => String.fromCharCode(b)).join(''))."
+                    ))
             try:
-                import base64 as _b64
-                payload = result_val.encode("utf-8") if output_encoding == "utf8" \
-                    else _b64.b64decode(result_val, validate=False)
-                meta = write_bytes_evidence(output_file, payload, overwrite=overwrite)
+                if output_encoding == "utf8":
+                    clean_str, replaced = sanitize_surrogates(result_val)
+                    if replaced:
+                        warnings_list.append(f"replaced {replaced} lone UTF-16 surrogate(s) with U+FFFD")
+                    payload = clean_str.encode("utf-8")
+                else:
+                    compact = _re.sub(r"[ \t\r\n]+", "", result_val)
+                    if compact.lower().startswith("data:"):
+                        return _decorate(_build_error_response(
+                            "output_encoding='base64' expects raw base64, not a data: URL; "
+                            "strip the 'data:...;base64,' prefix first"
+                        ))
+                    if not compact.isascii():
+                        return _decorate(_build_error_response(
+                            "output_encoding='base64' received non-ASCII characters"
+                        ))
+                    payload = _b64.b64decode(compact, validate=True)
+                meta = await asyncio.to_thread(
+                    write_bytes_evidence, output_file, payload, overwrite=overwrite
+                )
+                if output_encoding == "utf8":
+                    meta["encoding"] = "utf-8"
+                    meta["chars"] = len(clean_str)
             except Exception as exc:
                 return _decorate(_build_error_response(
                     f"failed to write output_file: {exc}"
@@ -306,11 +353,8 @@ async def evaluate_js(
                 "value": None,
                 "output": meta,
                 "preview": preview(result_val),
-                "warnings": None,
+                "warnings": warnings_list if warnings_list else None,
             })
-        js_type = raw.get("type") if isinstance(raw, dict) else None
-        js_value_type = js_type
-        warnings_list: list[str] = []
 
         if result_format == "json_ascii":
             if not isinstance(result_val, str) or not raw.get("json_ascii"):
