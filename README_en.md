@@ -77,8 +77,8 @@ Add this to your client's MCP configuration, such as `.cursor/mcp.json` for Curs
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and git first, then run these once in a terminal:
 
 ```bash
-uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.0" camoufox-reverse-mcp --version
-uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.0" camoufox fetch
+uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.1" camoufox-reverse-mcp --version
+uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.1" camoufox fetch
 ```
 
 The first command downloads the dependencies and confirms the version, which keeps your client from timing out on the first start. The second downloads the browser into your user cache, so clearing uvx environments does not remove it.
@@ -92,7 +92,7 @@ Add this to your client's MCP configuration:
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.0",
+        "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.1",
         "camoufox-reverse-mcp"
       ]
     }
@@ -103,18 +103,18 @@ Add this to your client's MCP configuration:
 Claude Code can add it with one command:
 
 ```bash
-claude mcp add --scope user camoufox-reverse -- uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.0" camoufox-reverse-mcp
+claude mcp add --scope user camoufox-reverse -- uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.1" camoufox-reverse-mcp
 ```
 
 <details>
 <summary>Updating and persistent installs</summary>
 
-**Updating**: find the latest tag on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases), change `@v1.13.0` in the configuration to it, and restart your client. A tag never moves on its own. Without `@v1.13.0`, every start follows the latest commit on main, which is not recommended for daily use. If `check_environment` reports a missing browser, run `camoufox fetch` again with the new tag.
+**Updating**: find the latest tag on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases), change `@v1.13.1` in the configuration to it, and restart your client. A tag never moves on its own. Without `@v1.13.1`, every start follows the latest commit on main, which is not recommended for daily use. If `check_environment` reports a missing browser, run `camoufox fetch` again with the new tag.
 
 **Persistent install**: set `command` to `camoufox-reverse-mcp` and leave out `args`. Fetch the browser with the `uvx ... camoufox fetch` command above, because both setups share the same browser.
 
 ```bash
-uv tool install "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.0"
+uv tool install "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.1"
 uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@<new-tag>"
 ```
 
