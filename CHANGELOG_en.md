@@ -4,6 +4,12 @@
 
 Full notes for v1.1.1 and later are in [docs/releases](docs/releases) (Chinese). Packages are on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases).
 
+## v1.13.1 (2026-11-25) — `list_network_requests` no longer truncates URLs silently
+
+- The `url` field of `list_network_requests` was hard-cut with `[:200]` and carried no marker: a long URL lost its query tail while still reading like a complete URL, so a missing parameter was easy to misdiagnose (measured case: an existing signature was read as absent). Truncated previews now end with `…` and expose `url_truncated` (bool) plus `url_length` (real length), mirroring `body_truncated`
+- The `list_network_requests` docstring now states that query parameters, signatures and tokens must never be read from a truncated preview — call `get_network_request(request_id=...)` for the complete URL first
+- The preview budget became the module constant `URL_PREVIEW_CHARS` (still 200), so output size is unchanged and only observability is added
+
 ## v1.13.0 (2026-11-24) — Payload Script Extraction, Generic Evidence I/O, and Session Liveness
 
 - New `extract_script` tool (43 tools in total): extracts script payloads delivered via `fetch` + `eval` (which never register as `<script src>` resources) from captured responses or raw text using dotted/bracketed JSON paths (`data.data`, `items[0].script`, or `""` for raw script bodies) and persists them atomically via `utils/evidence.py`; rejects truncated `max_body_size` captures unless `allow_partial=True`, closing the loop with `instrumentation(action="rewrite_source")` + `intercept_request(mock_response={"body_file": ...})`

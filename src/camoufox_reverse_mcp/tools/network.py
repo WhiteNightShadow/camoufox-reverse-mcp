@@ -18,6 +18,10 @@ from ..utils.evidence import (
 from ..server import mcp, browser_manager
 from ..utils.worlds import evaluate_in_world
 
+# Long URLs lose their tail silently before v1.13.1, which made query parameters,
+# signatures and tokens look absent. Keep the preview budget but mark every cut.
+URL_PREVIEW_CHARS = 200
+
 
 @mcp.tool()
 async def network_capture(
@@ -105,6 +109,12 @@ async def list_network_requests(
         List of request summaries. Legacy size is retained body characters;
         size_unit is characters and body_bytes is the retained decoded entity
         byte count when encoding is known. Not compressed wire bytes.
+
+        ``url`` is a preview capped at URL_PREVIEW_CHARS (200). When it is cut,
+        the value ends with "…" and ``url_truncated`` is True while
+        ``url_length`` reports the real length. Never read a query parameter,
+        signature or token out of a truncated preview: call
+        get_network_request(request_id=...) for the complete URL first.
     """
     try:
         if limit is not None and not 1 <= limit <= 2000:
@@ -130,8 +140,14 @@ async def list_network_requests(
         summaries = []
         for r in reqs:
             body_size = len(r["response_body"]) if r.get("response_body") else 0
+            raw_url = r["url"] or ""
+            url_truncated = len(raw_url) > URL_PREVIEW_CHARS
             summaries.append({
-                "id": r["id"], "url": r["url"][:200], "method": r["method"],
+                "id": r["id"],
+                "url": raw_url[:URL_PREVIEW_CHARS] + "…" if url_truncated else raw_url,
+                "url_truncated": url_truncated,
+                "url_length": len(raw_url),
+                "method": r["method"],
                 "status": r.get("status"), "type": r.get("resource_type"),
                 "ms": r.get("duration"), "size": body_size,
                 "size_unit": "characters",

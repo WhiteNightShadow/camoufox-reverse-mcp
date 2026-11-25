@@ -49,7 +49,7 @@
 | 工具 | 说明 |
 |------|------|
 | `network_capture(action)` | 网络捕获控制：`start` / `stop` / `clear` / `status` |
-| `list_network_requests` | 列出已捕获的请求（支持 URL / 域名 / 方法 / 类型 / 状态码过滤） |
+| `list_network_requests` | 列出已捕获的请求（支持 URL / 域名 / 方法 / 类型 / 状态码过滤）；`url` 为预览，超过 200 字符以 `…` 结尾并置 `url_truncated`，读参数/签名前用 `get_network_request` 取完整值 |
 | `get_network_request` | 获取请求完整详情（`max_body_size` 控制 body 截断） |
 | `get_request_initiator` | 获取请求发起的 JS 调用栈 |
 | `extract_script` | 从已捕获响应里取出一段脚本（按 `json_path` 走点分/下标路径，如 `data.data` 或 `items[0].script`，拦截截断响应体）；可写 `output_file`。用于 fetch+eval 型 SDK：这类代码没有 script 资源，源码搜索与路由改写都够不到 |

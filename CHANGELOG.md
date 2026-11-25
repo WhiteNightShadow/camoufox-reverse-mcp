@@ -4,6 +4,12 @@
 
 v1.1.1 起每个版本的完整说明在 [docs/releases](docs/releases)，发布包在 [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases)。
 
+## v1.13.1（2026-11-25）— `list_network_requests` 的 URL 预览不再静默截断
+
+- `list_network_requests` 的 `url` 字段此前固定按 `[:200]` 截断且不带任何标记：超长 URL 的查询参数会整段消失，而返回值看起来是完整 URL，读到结尾处极易被误判成「这个参数没有出现在请求里」（实测踩坑：把一个签名的存在判成了缺失）。现在截断处补 `…`，并新增 `url_truncated`（bool）与 `url_length`（真实长度）两个字段，语义与 `body_truncated` 一致
+- `list_network_requests` 的 docstring 明确要求：不要从被截断的预览里读取查询参数、签名或 token，先用 `get_network_request(request_id=...)` 取完整 URL
+- 预览上限抽为模块常量 `URL_PREVIEW_CHARS`，默认值仍为 200，输出体积与旧版一致，只增加可观测性
+
 ## v1.13.0（2026-11-24）— 载荷脚本提取、通用证据落盘与死会话自愈
 
 - 新增 `extract_script`（第 43 个 MCP 工具）：针对经 `fetch` + `eval` 下发而无独立 `<script src>` 资源的动态 SDK，支持从已捕获响应或原始文本按点分/下标 JSON 路径（如 `data.data`、`items[0].script`，传空串表示整份响应即脚本）提取源码并经 `utils/evidence.py` 安全落盘；默认拦截被 `max_body_size` 截断的半截响应体（`allow_partial=False`），配合 `instrumentation(action="rewrite_source")` + `intercept_request(mock_response={"body_file": ...})` 闭环离线打点与热替换
