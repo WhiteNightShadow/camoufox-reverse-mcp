@@ -77,8 +77,8 @@ Add this to your client's MCP configuration, such as `.cursor/mcp.json` for Curs
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and git first, then run these once in a terminal:
 
 ```bash
-uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.0" camoufox-reverse-mcp --version
-uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.0" camoufox fetch
+uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.1" camoufox-reverse-mcp --version
+uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.1" camoufox fetch
 ```
 
 The first command downloads the dependencies and confirms the version, which keeps your client from timing out on the first start. The second downloads the browser into your user cache, so clearing uvx environments does not remove it.
@@ -92,7 +92,7 @@ Add this to your client's MCP configuration:
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.0",
+        "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.1",
         "camoufox-reverse-mcp"
       ]
     }
@@ -103,18 +103,18 @@ Add this to your client's MCP configuration:
 Claude Code can add it with one command:
 
 ```bash
-claude mcp add --scope user camoufox-reverse -- uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.0" camoufox-reverse-mcp
+claude mcp add --scope user camoufox-reverse -- uvx --from "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.1" camoufox-reverse-mcp
 ```
 
 <details>
 <summary>Updating and persistent installs</summary>
 
-**Updating**: find the latest tag on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases), change `@v1.13.0` in the configuration to it, and restart your client. A tag never moves on its own. Without `@v1.13.0`, every start follows the latest commit on main, which is not recommended for daily use. If `check_environment` reports a missing browser, run `camoufox fetch` again with the new tag.
+**Updating**: find the latest tag on [Releases](https://github.com/WhiteNightShadow/camoufox-reverse-mcp/releases), change `@v1.13.1` in the configuration to it, and restart your client. A tag never moves on its own. Without `@v1.13.1`, every start follows the latest commit on main, which is not recommended for daily use. If `check_environment` reports a missing browser, run `camoufox fetch` again with the new tag.
 
 **Persistent install**: set `command` to `camoufox-reverse-mcp` and leave out `args`. Fetch the browser with the `uvx ... camoufox fetch` command above, because both setups share the same browser.
 
 ```bash
-uv tool install "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.0"
+uv tool install "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@v1.13.1"
 uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-reverse-mcp.git@<new-tag>"
 ```
 
@@ -183,6 +183,7 @@ Put them after the start command. With uvx, put them after `camoufox-reverse-mcp
 
 ## Changelog
 
+- **v1.13.1** (2026-11-25): `list_network_requests` (and `wait_for` request summaries) no longer truncates `url` silently — long URLs end with `…` and expose `url_truncated` / `url_length`, so a cut query tail can no longer be read as a missing parameter; the docstring now requires `get_network_request` for the complete URL before reading parameters, signatures or tokens. [Notes](docs/releases/v1.13.1.md)
 - **v1.13.0** (2026-11-24): adds `extract_script` to extract `fetch`+`eval` SDK payloads from captured JSON responses to disk (43 tools in total); `evaluate_js` gains `output_file` (UTF-8 / Base64 atomic evidence persistence); `cookies(action="header")` exports RFC 6265-scoped `Cookie` headers with `0600` file output; `wait_for` adds `mode="request"` for settled captured requests; fixes dead-session `already_running` wedges and `rdp_debugger` initial-tab races. [Notes](docs/releases/v1.13.0.md)
 - **v1.12.0** (2026-11-20): `instrumentation` gains `inject` for source-level regex insertion (modern JS validation, literal/template guards and `case` label shifting); `intercept_request` accepts `mock_response.body_file` re-read per request; `rdp_debugger` supports `url_pattern` + `find` pattern breakpoints across reloads. [Notes](docs/releases/v1.12.0.md)
 - **v1.11.1** (2026-11-15): skips the two POSIX Unix-socket path tests on Windows CI and aligns release note validation with the automated release workflow. [Notes](docs/releases/v1.11.1.md)
@@ -194,7 +195,7 @@ See [CHANGELOG_en.md](CHANGELOG_en.md) for every version.
 
 - [@tuntun1337](https://github.com/tuntun1337) — strict JSON Schema compatibility
 - [@Code-xy](https://github.com/Code-xy) — Windows engine-trace diagnosis and validation
-- [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP execution-site requirements and analysis materials, `tap_stage_calls` stage taps and `inject` regex insertion for `instrumentation`, `stage_break` and `trace_session`, `body_file` mocks for `intercept_request`, `extract_script` payload extraction and generic evidence I/O (`evaluate_js` / `cookies` / `wait_for`), stale-session recovery and `rdp_debugger` Firefox RDP debugging, and the #19–#25 reports addressed in v1.10.0
+- [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP execution-site requirements and analysis materials, `tap_stage_calls` stage taps and `inject` regex insertion for `instrumentation`, `stage_break` and `trace_session`, `body_file` mocks for `intercept_request`, `extract_script` payload extraction and generic evidence I/O (`evaluate_js` / `cookies` / `wait_for`), `list_network_requests` URL truncation observability, stale-session recovery and `rdp_debugger` Firefox RDP debugging, and the #19–#25 reports addressed in v1.10.0
 - [@dsaw1111](https://github.com/dsaw1111) — Camoufox 152 version-gap and PropertyTracer upgrade request
 - [@chung1912](https://github.com/chung1912) — `uvx` install suggestion and `uv tool install` setup
 - [@tunguyen1993](https://github.com/tunguyen1993) — `script_url` escaping report and fix for `hook_jsvmp_interpreter`

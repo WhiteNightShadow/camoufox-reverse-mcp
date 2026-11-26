@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 MAX_EVIDENCE_BYTES = 50 * 1024 * 1024  # 50 MiB safety ceiling
+URL_PREVIEW_CHARS = 200
 
 
 def sanitize_surrogates(text: str) -> tuple[str, int]:
@@ -216,3 +217,23 @@ def preview(text: str, limit: int = 120) -> str | None:
     if limit == 0:
         return "..."
     return flat[:limit] + ("..." if len(flat) > limit else "")
+
+
+def normalize_url_text(raw_url: Any) -> str:
+    """Coerce an entry URL to a UTF-8/surrogate-safe string."""
+    if raw_url is None:
+        return ""
+    clean_url, _ = sanitize_surrogates(raw_url if isinstance(raw_url, str) else str(raw_url))
+    return clean_url
+
+
+def url_preview_fields(raw_url: Any, limit: int = URL_PREVIEW_CHARS) -> dict[str, Any]:
+    """Bounded URL preview plus truncation metadata for request summaries."""
+    clean_url = normalize_url_text(raw_url)
+    limit = max(0, int(limit))
+    truncated = len(clean_url) > limit
+    return {
+        "url": clean_url[:limit] + "…" if truncated else clean_url,
+        "url_truncated": truncated,
+        "url_length": len(clean_url),
+    }

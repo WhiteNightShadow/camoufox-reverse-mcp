@@ -135,3 +135,62 @@ async def test_body_size_units_are_explicit(monkeypatch):
     assert summary['size']==2 and summary['size_unit']=='characters' and summary['body_bytes']==6
     full=await network.get_network_request(1,include_body=True)
     assert full['response_body_size_unit']=='characters' and full['response_body_total_bytes']==6
+
+
+async def test_list_network_requests_url_preview_boundaries_and_full_url_filter(monkeypatch):
+    from camoufox_reverse_mcp.tools.navigation import _request_summary
+
+    short_url = 'https://api.example.test/ping?x=1'
+    prefix = 'https://api.example.test/v2/item/detail?pad='
+    exact_200 = prefix + ('a' * (network.URL_PREVIEW_CHARS - len(prefix)))
+    cut_201 = exact_200 + 'Z'
+    long_signed = exact_200 + '&nonce=n1&sig=tail_only_after_200'
+    assert len(exact_200) == 200 and len(cut_201) == 201
+
+    manager = BrowserManager()
+    manager._network_requests.extend([
+        entry(1, url=short_url),
+        entry(2, url=exact_200),
+        entry(3, url=cut_201),
+        entry(4, url=long_signed),
+    ])
+    monkeypatch.setattr(network, 'browser_manager', manager)
+
+    rows = {row['id']: row for row in await network.list_network_requests()}
+    assert rows[1]['url'] == short_url and rows[1]['url_truncated'] is False and rows[1]['url_length'] == len(short_url)
+    assert rows[2]['url'] == exact_200 and rows[2]['url_truncated'] is False and rows[2]['url_length'] == 200
+    assert rows[3]['url'] == exact_200 + '…' and rows[3]['url_truncated'] is True and rows[3]['url_length'] == 201
+    assert rows[4]['url'] == exact_200 + '…' and rows[4]['url_truncated'] is True and rows[4]['url_length'] == len(long_signed)
+
+    filtered = await network.list_network_requests(url_filter='sig=tail_only_after_200')
+    assert [r['id'] for r in filtered] == [4]
+    assert filtered[0]['url_truncated'] is True and 'sig=tail_only_after_200' not in filtered[0]['url']
+
+    full = await network.get_network_request(4)
+    assert full['url'] == long_signed
+
+    wait_summary = _request_summary(manager._network_requests[3])
+    assert wait_summary['url'] == rows[4]['url']
+    assert wait_summary['url_truncated'] is True and wait_summary['url_length'] == len(long_signed)
+
+
+async def test_url_preview_handles_missing_url_and_lone_surrogates(monkeypatch):
+    prefix = 'https://api.example.test/beacon?blob='
+    surrogate_url = prefix + ('x' * (199 - len(prefix))) + '\ud800' + 'tail'
+    manager = BrowserManager()
+    manager._network_requests.extend([
+        {'id': 10, 'method': 'GET'},
+        {'id': 11, 'url': None, 'method': 'GET'},
+        entry(12, url=surrogate_url),
+    ])
+    monkeypatch.setattr(network, 'browser_manager', manager)
+
+    rows = {row['id']: row for row in await network.list_network_requests()}
+    assert rows[10]['url'] == '' and rows[10]['url_truncated'] is False and rows[10]['url_length'] == 0
+    assert rows[11]['url'] == '' and rows[11]['url_truncated'] is False and rows[11]['url_length'] == 0
+    assert rows[12]['url'].endswith('\ufffd…')
+    assert rows[12]['url_truncated'] is True and rows[12]['url_length'] == len(surrogate_url)
+    json.dumps(rows, ensure_ascii=False).encode('utf-8')
+
+    by_domain = await network.list_network_requests(url_contains_domain='example.test')
+    assert [r['id'] for r in by_domain] == [12]

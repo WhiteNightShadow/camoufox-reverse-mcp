@@ -6,6 +6,7 @@ import base64
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from ..server import browser_manager, mcp
+from ..utils.evidence import url_preview_fields
 from ..utils.frames import list_frame_metadata
 from ..utils.jsvmp_hooks import main_world_init_script, proxy_probe, transparent_probe
 from ..utils.presets import canonical_preset, preset_expression
@@ -567,9 +568,10 @@ def _request_summary(entry: dict) -> dict:
     body_bytes = entry.get("response_body_bytes")
     if body_bytes is None and isinstance(body, str):
         body_bytes = len(body.encode("utf-8", "replace"))
+    url_meta = url_preview_fields(entry.get("url"))
     summary: dict = {
         "id": entry.get("id"),
-        "url": entry.get("url"),
+        **url_meta,
         "method": entry.get("method"),
         "status": entry.get("status"),
         "ms": entry.get("ms") if "ms" in entry else entry.get("duration"),

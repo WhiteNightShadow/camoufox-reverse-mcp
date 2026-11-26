@@ -9,9 +9,12 @@ from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 from ..utils.domains import domain_matches
 from ..utils.evidence import (
+    URL_PREVIEW_CHARS,
+    normalize_url_text,
     preview as _preview_evidence,
     resolve_output_path,
     sanitize_surrogates,
+    url_preview_fields,
     write_text_evidence,
 )
 
@@ -105,6 +108,12 @@ async def list_network_requests(
         List of request summaries. Legacy size is retained body characters;
         size_unit is characters and body_bytes is the retained decoded entity
         byte count when encoding is known. Not compressed wire bytes.
+
+        ``url`` is a preview capped at URL_PREVIEW_CHARS (200). When it is cut,
+        the value ends with "…" and ``url_truncated`` is True while
+        ``url_length`` reports the real length. Never read a query parameter,
+        signature or token out of a truncated preview: call
+        get_network_request(request_id=...) for the complete URL first.
     """
     try:
         if limit is not None and not 1 <= limit <= 2000:
@@ -115,11 +124,14 @@ async def list_network_requests(
         if after_id is not None:
             reqs = [r for r in reqs if r["id"] > after_id]
         if url_filter:
-            reqs = [r for r in reqs if url_filter in r["url"]]
+            reqs = [r for r in reqs if url_filter in normalize_url_text(r.get("url"))]
         if url_contains_domain:
-            reqs = [r for r in reqs if domain_matches(urlsplit(r["url"]).hostname or "", url_contains_domain)]
+            reqs = [
+                r for r in reqs
+                if domain_matches(urlsplit(normalize_url_text(r.get("url"))).hostname or "", url_contains_domain)
+            ]
         if method:
-            reqs = [r for r in reqs if r["method"].upper() == method.upper()]
+            reqs = [r for r in reqs if str(r.get("method") or "").upper() == method.upper()]
         if resource_type:
             reqs = [r for r in reqs if r.get("resource_type") == resource_type]
         if status_code is not None:
@@ -130,8 +142,11 @@ async def list_network_requests(
         summaries = []
         for r in reqs:
             body_size = len(r["response_body"]) if r.get("response_body") else 0
+            url_meta = url_preview_fields(r.get("url"), limit=URL_PREVIEW_CHARS)
             summaries.append({
-                "id": r["id"], "url": r["url"][:200], "method": r["method"],
+                "id": r.get("id"),
+                **url_meta,
+                "method": r.get("method"),
                 "status": r.get("status"), "type": r.get("resource_type"),
                 "ms": r.get("duration"), "size": body_size,
                 "size_unit": "characters",

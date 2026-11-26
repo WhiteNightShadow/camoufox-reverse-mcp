@@ -28,7 +28,9 @@ def registered_tools():
         "from camoufox_reverse_mcp.server import mcp\n"
         "print(' '.join(tool.name for tool in asyncio.run(mcp.list_tools())))\n"
     )
-    output = subprocess.check_output([sys.executable, "-c", code], text=True, timeout=120)
+    output = subprocess.check_output(
+        [sys.executable, "-c", code], text=True, encoding="utf-8", timeout=120
+    )
     return frozenset(output.strip().splitlines()[-1].split())
 
 
@@ -88,3 +90,26 @@ def test_relative_links_and_anchors_resolve(name):
         assert linked.exists(), target
         if anchor:
             assert anchor in heading_anchors(linked.read_text(encoding="utf-8")), target
+
+
+def test_current_release_notes_match_release_workflow_template():
+    notes = ROOT / f"docs/releases/v{__version__}.md"
+    assert notes.is_file(), f"missing release notes: {notes}"
+    text = notes.read_text(encoding="utf-8")
+    assert text.startswith("## 版本说明\n")
+    assert "## 主要变更" in text and "**完整变更**：" in text
+    lines = text.splitlines()
+    headings = [line for line in lines if line.startswith("## ")]
+    allowed = ["## 版本说明", "## 主要变更", "## 兼容性", "## 验证", "## 相关版本", "## 致谢"]
+    positions = [allowed.index(item) for item in headings if item in allowed]
+    assert headings[:2] == allowed[:2]
+    assert len(headings) == len(set(headings)) == len(positions)
+    assert positions == sorted(positions)
+    main_start = lines.index("## 主要变更") + 1
+    main_end = next(
+        (index for index in range(main_start, len(lines)) if lines[index].startswith("## ")),
+        len(lines),
+    )
+    main_items = [line for line in lines[main_start:main_end] if line.startswith("- ")]
+    assert 2 <= len(main_items) <= 4
+    assert any("\u4e00" <= char <= "\u9fff" for char in text)

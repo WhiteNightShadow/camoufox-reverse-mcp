@@ -49,7 +49,7 @@
 | Tool | Description |
 |------|-------------|
 | `network_capture(action)` | Capture control: `start` / `stop` / `clear` / `status` |
-| `list_network_requests` | List captured requests (filter by URL / domain / method / type / status) |
+| `list_network_requests` | List captured requests (filter by URL / domain / method / type / status); `url` is a preview that ends with `…` and sets `url_truncated` past 200 chars — use `get_network_request` for parameters and signatures |
 | `get_network_request` | Get full request details (`max_body_size` controls body truncation) |
 | `get_request_initiator` | Get JS call stack that initiated a request |
 | `extract_script` | Pull a script string out of a captured response (`json_path` walks dotted/bracketed JSON such as `data.data` or `items[0].script`, rejecting truncated bodies unless `allow_partial=True`); optional `output_file`. For fetch+eval SDKs: that code has no script resource, so source search and route rewriting cannot reach it |
