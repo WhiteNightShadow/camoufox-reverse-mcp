@@ -9,18 +9,17 @@ from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 from ..utils.domains import domain_matches
 from ..utils.evidence import (
+    URL_PREVIEW_CHARS,
+    normalize_url_text,
     preview as _preview_evidence,
     resolve_output_path,
     sanitize_surrogates,
+    url_preview_fields,
     write_text_evidence,
 )
 
 from ..server import mcp, browser_manager
 from ..utils.worlds import evaluate_in_world
-
-# Long URLs lose their tail silently before v1.13.1, which made query parameters,
-# signatures and tokens look absent. Keep the preview budget but mark every cut.
-URL_PREVIEW_CHARS = 200
 
 
 @mcp.tool()
@@ -125,11 +124,14 @@ async def list_network_requests(
         if after_id is not None:
             reqs = [r for r in reqs if r["id"] > after_id]
         if url_filter:
-            reqs = [r for r in reqs if url_filter in r["url"]]
+            reqs = [r for r in reqs if url_filter in normalize_url_text(r.get("url"))]
         if url_contains_domain:
-            reqs = [r for r in reqs if domain_matches(urlsplit(r["url"]).hostname or "", url_contains_domain)]
+            reqs = [
+                r for r in reqs
+                if domain_matches(urlsplit(normalize_url_text(r.get("url"))).hostname or "", url_contains_domain)
+            ]
         if method:
-            reqs = [r for r in reqs if r["method"].upper() == method.upper()]
+            reqs = [r for r in reqs if str(r.get("method") or "").upper() == method.upper()]
         if resource_type:
             reqs = [r for r in reqs if r.get("resource_type") == resource_type]
         if status_code is not None:
@@ -140,14 +142,11 @@ async def list_network_requests(
         summaries = []
         for r in reqs:
             body_size = len(r["response_body"]) if r.get("response_body") else 0
-            raw_url = r["url"] or ""
-            url_truncated = len(raw_url) > URL_PREVIEW_CHARS
+            url_meta = url_preview_fields(r.get("url"), limit=URL_PREVIEW_CHARS)
             summaries.append({
-                "id": r["id"],
-                "url": raw_url[:URL_PREVIEW_CHARS] + "…" if url_truncated else raw_url,
-                "url_truncated": url_truncated,
-                "url_length": len(raw_url),
-                "method": r["method"],
+                "id": r.get("id"),
+                **url_meta,
+                "method": r.get("method"),
                 "status": r.get("status"), "type": r.get("resource_type"),
                 "ms": r.get("duration"), "size": body_size,
                 "size_unit": "characters",

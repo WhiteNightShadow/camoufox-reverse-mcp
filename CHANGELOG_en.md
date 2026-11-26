@@ -6,9 +6,12 @@ Full notes for v1.1.1 and later are in [docs/releases](docs/releases) (Chinese).
 
 ## v1.13.1 (2026-11-25) — `list_network_requests` no longer truncates URLs silently
 
-- The `url` field of `list_network_requests` was hard-cut with `[:200]` and carried no marker: a long URL lost its query tail while still reading like a complete URL, so a missing parameter was easy to misdiagnose (measured case: an existing signature was read as absent). Truncated previews now end with `…` and expose `url_truncated` (bool) plus `url_length` (real length), mirroring `body_truncated`
-- The `list_network_requests` docstring now states that query parameters, signatures and tokens must never be read from a truncated preview — call `get_network_request(request_id=...)` for the complete URL first
-- The preview budget became the module constant `URL_PREVIEW_CHARS` (still 200), so output size is unchanged and only observability is added
+- `list_network_requests` (and `wait_for(mode="request"|"auto")` request summaries) previously hard-cut `url` with `[:200]` without any marker: a long URL lost its query tail while still reading like a complete URL, making existing parameters or signatures look absent. Truncated previews now end with `…` and expose `url_truncated` (bool) plus `url_length` (real character length), mirroring `body_truncated`, with surrogate-safe normalization and missing-`url` handling
+- `url_filter` and `url_contains_domain` continue to match against the full URL; the `list_network_requests` docstring states that query parameters, signatures and tokens must never be read from a truncated preview — call `get_network_request(request_id=...)` for the complete URL first
+- The preview budget is exposed as `URL_PREVIEW_CHARS` (still 200), keeping output size unchanged while adding observability
+- Thanks to [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) for reporting and fixing this issue (#31)
+
+See the [Chinese release notes](docs/releases/v1.13.1.md).
 
 ## v1.13.0 (2026-11-24) — Payload Script Extraction, Generic Evidence I/O, and Session Liveness
 

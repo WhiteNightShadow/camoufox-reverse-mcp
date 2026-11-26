@@ -6,9 +6,12 @@ v1.1.1 起每个版本的完整说明在 [docs/releases](docs/releases)，发布
 
 ## v1.13.1（2026-11-25）— `list_network_requests` 的 URL 预览不再静默截断
 
-- `list_network_requests` 的 `url` 字段此前固定按 `[:200]` 截断且不带任何标记：超长 URL 的查询参数会整段消失，而返回值看起来是完整 URL，读到结尾处极易被误判成「这个参数没有出现在请求里」（实测踩坑：把一个签名的存在判成了缺失）。现在截断处补 `…`，并新增 `url_truncated`（bool）与 `url_length`（真实长度）两个字段，语义与 `body_truncated` 一致
-- `list_network_requests` 的 docstring 明确要求：不要从被截断的预览里读取查询参数、签名或 token，先用 `get_network_request(request_id=...)` 取完整 URL
-- 预览上限抽为模块常量 `URL_PREVIEW_CHARS`，默认值仍为 200，输出体积与旧版一致，只增加可观测性
+- `list_network_requests`（及 `wait_for(mode="request"|"auto")` 的请求摘要）此前固定将 `url` 按 `[:200]` 截断且不带任何标记：超长 URL 的查询参数会整段消失，返回值看起来仍是完整 URL，极易误判成「请求未携带该参数」。现在截断处补 `…`，并新增 `url_truncated`（bool）与 `url_length`（真实字符长度）两个字段，语义与 `body_truncated` 一致，同时统一清洗孤立 UTF-16 代理项并兼容缺省 `url`
+- `list_network_requests` 的 `url_filter` / `url_contains_domain` 仍对完整 URL 匹配；docstring 明确要求不要从截断预览中读取查询参数、签名或 token，先用 `get_network_request(request_id=...)` 取完整 URL
+- 预览上限抽为模块常量 `URL_PREVIEW_CHARS`（默认值仍为 200），输出体积与旧版一致，只增加可观测性
+- 感谢 [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) 定位并修复该问题（#31）
+
+详情见 [v1.13.1](docs/releases/v1.13.1.md)。
 
 ## v1.13.0（2026-11-24）— 载荷脚本提取、通用证据落盘与死会话自愈
 

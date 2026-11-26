@@ -183,7 +183,8 @@ uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-revers
 
 ## 更新记录
 
-- **v1.13.1**（2026-11-25）：`list_network_requests` 的 `url` 预览不再静默截断——超长 URL 补 `…` 并新增 `url_truncated` / `url_length`，避免把被截掉的查询参数误判成「请求里没有这个参数」；docstring 要求读参数、签名、token 前先用 `get_network_request` 取完整 URL。[详情](docs/releases/v1.13.1.md)- **v1.13.0**（2026-11-24）：新增 `extract_script`（从 `fetch`+`eval` 响应 JSON 中按路径提取脚本并落盘，工具扩充为 43 个）；`evaluate_js` 新增 `output_file`（UTF-8 / Base64 安全落盘）；`cookies(action="header")` 支持按 URL/域名拼装 RFC 6265 `Cookie` 头并以 `0600` 权限落盘；`wait_for` 新增 `mode="request"` 等待已捕获请求收尾；修复死浏览器句柄误报 `already_running` 与 `rdp_debugger` 首标签页竞态。[详情](docs/releases/v1.13.0.md)
+- **v1.13.1**（2026-11-25）：`list_network_requests`（及 `wait_for` 请求摘要）的 `url` 预览不再静默截断——超长 URL 补 `…` 并新增 `url_truncated` / `url_length`，避免把被截掉的查询参数误判成「请求里没有这个参数」；docstring 要求读参数、签名、token 前先用 `get_network_request` 取完整 URL。[详情](docs/releases/v1.13.1.md)
+- **v1.13.0**（2026-11-24）：新增 `extract_script`（从 `fetch`+`eval` 响应 JSON 中按路径提取脚本并落盘，工具扩充为 43 个）；`evaluate_js` 新增 `output_file`（UTF-8 / Base64 安全落盘）；`cookies(action="header")` 支持按 URL/域名拼装 RFC 6265 `Cookie` 头并以 `0600` 权限落盘；`wait_for` 新增 `mode="request"` 等待已捕获请求收尾；修复死浏览器句柄误报 `already_running` 与 `rdp_debugger` 首标签页竞态。[详情](docs/releases/v1.13.0.md)
 - **v1.12.0**（2026-11-20）：`instrumentation` 新增 `inject` 源码级正则插桩（跨构建打点，支持现代语法校验、模板/字面量跳过与 `case` 标签偏移）；`intercept_request` 支持 `mock_response.body_file` 按请求重读大体积脚本；`rdp_debugger` 支持 `url_pattern` + `find` 正则断点跨刷新自动重算重下。[详情](docs/releases/v1.12.0.md)
 - **v1.11.1**（2026-11-15）：修复 Windows CI 下两条 POSIX Unix socket 路径测试未跳过的问题，并对齐自动发布流水线校验。[详情](docs/releases/v1.11.1.md)
 - **v1.11.0**（2026-11-15）：新增 `rdp_debugger`，走 Firefox 原生 RDP 补齐真断点、单步、调用栈、作用域、暂停帧求值与请求前断点；与 `launch_browser` 共用指纹/代理/激活版本配置，支持 macOS/Linux 0700 Unix socket，工具扩充为 42 个。[详情](docs/releases/v1.11.0.md)
@@ -194,7 +195,7 @@ uv tool install --force "git+https://github.com/WhiteNightShadow/camoufox-revers
 
 - [@tuntun1337](https://github.com/tuntun1337) — 严格 JSON Schema 兼容性
 - [@Code-xy](https://github.com/Code-xy) — Windows 引擎追踪问题定位与验证
-- [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP 执行点关联需求与分析材料，`instrumentation` 的 `tap_stage_calls` 阶段插桩与 `inject` 源码级正则插桩，`stage_break` 与 `trace_session`，`intercept_request` 的 `body_file` 磁盘替换，`extract_script` 载荷脚本提取与通用证据落盘（`evaluate_js` / `cookies` / `wait_for`），死会话自愈与 `rdp_debugger` Firefox RDP 断点调试，以及 v1.10.0 处理的 #19–#25 问题报告
+- [@Moojing-jianchuan](https://github.com/Moojing-jianchuan) — JSVMP 执行点关联需求与分析材料，`instrumentation` 的 `tap_stage_calls` 阶段插桩与 `inject` 源码级正则插桩，`stage_break` 与 `trace_session`，`intercept_request` 的 `body_file` 磁盘替换，`extract_script` 载荷脚本提取与通用证据落盘（`evaluate_js` / `cookies` / `wait_for`），`list_network_requests` 超长 URL 预览截断标记，死会话自愈与 `rdp_debugger` Firefox RDP 断点调试，以及 v1.10.0 处理的 #19–#25 问题报告
 - [@dsaw1111](https://github.com/dsaw1111) — Camoufox 152 版本差距与 PropertyTracer 升级需求
 - [@chung1912](https://github.com/chung1912) — `uvx` 安装建议与 `uv tool install` 配置
 - [@tunguyen1993](https://github.com/tunguyen1993) — `hook_jsvmp_interpreter` 的 `script_url` 转义问题与修复建议
